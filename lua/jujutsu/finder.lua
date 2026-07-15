@@ -211,19 +211,14 @@ end
 function M.pick_bookmark(opts)
   opts = opts or {}
   local cwd = opts.cwd or require("jujutsu.jj.repository").root() or vim.fn.getcwd()
-  local tmpl = field_template({
-    "name",
-    'if(remote, remote, "")',
-    "target.short(8)",
-  })
-  local res = cli.bookmark_list.all_remotes.template(tmpl).call({ cwd = cwd, hidden = true })
+  local bookmark = require("jujutsu.jj.bookmark")
+  local items = bookmark.list(cwd)
   local entries = {}
-  for _, f in ipairs(parse_sep_records(table.concat(res.stdout, "\n"))) do
-    if f[1] and f[1] ~= "" then
-      local name = f[1]
-      if f[2] and f[2] ~= "" then name = name .. "@" .. f[2] end
-      table.insert(entries, { text = string.format("%s  %s", name, f[3] or "") })
-    end
+  for _, bm in ipairs(items) do
+    local name = bm.name
+    if bm.remote ~= "" then name = name .. "@" .. bm.remote end
+    local detail = bm.description ~= "" and bm.description or bm.change_id
+    table.insert(entries, { text = string.format("%s  %s", name, detail or "") })
   end
   local selected = M.pick({ prompt = opts.prompt or "bookmark", entries = entries })
   if not selected then return nil end

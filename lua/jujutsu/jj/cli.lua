@@ -93,7 +93,7 @@ define_command("resolve", {
   options = { revision = "-r", tool = "--tool" },
 })
 define_command("bookmark list", {
-  flags = { all_remotes = "--all-remotes" },
+  flags = { all = "--all", all_remotes = "--all-remotes" },
   options = { template = "-T", revisions = "-r" },
 })
 define_command("bookmark create", { options = { revision = "-r" } })

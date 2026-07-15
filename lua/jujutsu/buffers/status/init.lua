@@ -303,15 +303,25 @@ local function build_items()
   local show_deleted = config.values.sections.bookmarks.show_deleted ~= false
   local visible_bms = {}
   for _, bm in ipairs(data.bookmarks) do
-    if (show_remote or bm.remote == "") and (show_deleted or not bm.deleted) then table.insert(visible_bms, bm) end
+    if bm.remote ~= "git" and (show_remote or bm.remote == "") and (show_deleted or not bm.deleted) then
+      table.insert(visible_bms, bm)
+    end
   end
+  table.sort(visible_bms, function(a, b)
+    local a_remote = a.remote ~= ""
+    local b_remote = b.remote ~= ""
+    if a_remote ~= b_remote then return not a_remote end
+    if a.timestamp ~= b.timestamp then return (a.timestamp or "") > (b.timestamp or "") end
+    return a.name < b.name
+  end)
   section("bookmarks", "Bookmarks", #visible_bms, function()
     for _, bm in ipairs(visible_bms) do
       local name = bm.name
       if bm.remote ~= "" then name = name .. "@" .. bm.remote end
       local pr = bm.pr and string.format(" #%d", bm.pr) or ""
+      local detail = string.format("%s %s %s", bm.change_id or "", bm.commit_id or "", bm.description or "")
+      local text = string.format("  %s%s %s", name, pr, detail)
       local name_hl = bm.remote ~= "" and "JujutsuRemoteBranch" or "JujutsuBranch"
-      local text = string.format("  %s%s %s", name, pr, bm.target)
       local highlights = {
         { col = 2, end_col = 2 + #name, hl = name_hl },
       }
@@ -420,15 +430,21 @@ local function get_change_from_item(item)
   if not item or not item.data then return nil end
   if item.data.change then return item.data.change end
   if item.data.bookmark then
-    return { change_id = item.data.bookmark.target, bookmarks = { item.data.bookmark.name } }
+    return {
+      change_id = item.data.bookmark.change_id or item.data.bookmark.target,
+      bookmarks = { item.data.bookmark.name },
+    }
   end
   return nil
 end
 
 local function after_action() M.refresh() end
 
-local function run_jj()
-  async.void(function() vim.schedule(after_action) end)
+local function run_jj(fn)
+  async.void(function()
+    fn()
+    vim.schedule(after_action)
+  end)
 end
 
 local function get_env()
@@ -628,7 +644,7 @@ local function bind_actions(bufnr)
         if bm.remote ~= "" then
           run_jj(
             function()
-              return cli.bookmark_track.args(bm.name .. "@" .. bm.remote).call_async({
+              return require("jujutsu.jj.bookmark").track(bm.name .. "@" .. bm.remote).call_async({
                 cwd = instance.root,
                 hidden = false,
               })

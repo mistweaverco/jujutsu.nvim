@@ -50,13 +50,13 @@ end
 function M.track(popup)
   local root = common.root(popup)
   local bm = finder.pick_bookmark({ prompt = "Track bookmark", cwd = root })
-  if bm then common.run(popup, cli.bookmark_track.args(bm)) end
+  if bm then common.run(popup, require("jujutsu.jj.bookmark").track(bm)) end
 end
 
 function M.untrack(popup)
   local root = common.root(popup)
   local bm = finder.pick_bookmark({ prompt = "Untrack bookmark", cwd = root })
-  if bm then common.run(popup, cli.bookmark_untrack.args(bm)) end
+  if bm then common.run(popup, require("jujutsu.jj.bookmark").untrack(bm)) end
 end
 
 function M.rename(popup)

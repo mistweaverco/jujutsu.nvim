@@ -34,14 +34,6 @@ local LOG_TEMPLATE = field_template({
   "author.timestamp().ago()",
 })
 
-local BOOKMARK_TEMPLATE = field_template({
-  "name",
-  'if(remote, remote, "")',
-  "target.short(8)",
-  'if(conflict, "true", "false")',
-  'if(normal_target, "false", "true")',
-})
-
 local REAL_SEP = "\x1f"
 local REAL_REC = "\x1e"
 
@@ -65,7 +57,7 @@ local REAL_REC = "\x1e"
 ---@field files FileStatus[]
 ---@field conflicts string[]
 ---@field recent ChangeInfo[]
----@field bookmarks { name: string, remote: string, target: string, conflict: boolean, deleted: boolean }[]
+---@field bookmarks { name: string, remote: string, change_id: string, commit_id: string, description: string, target: string, conflict: boolean, deleted: boolean }[]
 ---@field root string
 
 ---@param line string
@@ -127,7 +119,7 @@ function M.fetch(root)
   local recent_res = cli.log.revisions("ancestors(@-)").no_graph.template(LOG_TEMPLATE).limit(recent_count).call(opts)
 
   local diff_res = cli.diff.summary.call(opts)
-  local bookmark_res = cli.bookmark_list.all_remotes.template(BOOKMARK_TEMPLATE).call(opts)
+  local bookmarks = require("jujutsu.jj.bookmark").list(root)
 
   local working_copy = parse_records(table.concat(wc_res.stdout, "\n"))[1]
   local parent = parse_records(table.concat(parent_res.stdout, "\n"))[1]
@@ -144,23 +136,6 @@ function M.fetch(root)
     if p and p ~= "" then table.insert(conflicts, p) end
   end
   if #conflicts == 0 then conflicts = conflicts_from_diff end
-
-  local bookmarks = {}
-  local bm_text = table.concat(bookmark_res.stdout, "\n")
-  for rec in (bm_text .. REAL_REC):gmatch("(.-)" .. REAL_REC) do
-    if rec ~= "" then
-      local f = split_fields(rec:gsub("\n", ""))
-      if f[1] and f[1] ~= "" then
-        table.insert(bookmarks, {
-          name = f[1],
-          remote = f[2] or "",
-          target = f[3] or "",
-          conflict = f[4] == "true",
-          deleted = f[5] == "true",
-        })
-      end
-    end
-  end
 
   pcall(function() bookmarks = require("jujutsu.forge").annotate_bookmarks(bookmarks, root) end)
 
