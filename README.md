@@ -1,9 +1,17 @@
+<div align="center">
+
+![jujutsu.nvim Logo](logo.svg)
+
 # jujutsu.nvim
 
 A Magit-style [Jujutsu (jj)](https://github.com/jj-vcs/jj) interface for Neovim.
 
+---
+
 Inspired by Neogit,
 rewritten without required plugin dependencies.
+
+</div>
 
 ## Requirements
 
