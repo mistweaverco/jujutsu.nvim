@@ -41,17 +41,15 @@ function M.pick(opts)
   opts = opts or {}
   local entries = opts.entries or {}
 
-  -- Free-text entry needs the built-in picker (external pickers can't accept arbitrary input).
-  if not opts.allow_free_text then
-    if config.check_integration("telescope") then
-      return M._telescope(opts)
-    elseif config.check_integration("fzf_lua") then
-      return M._fzf_lua(opts)
-    elseif config.check_integration("mini_pick") then
-      return M._mini_pick(opts)
-    elseif config.check_integration("snacks") then
-      return M._snacks(opts)
-    end
+  -- Prefer external pickers; free-text is supported on Telescope/fzf/snacks below.
+  if config.check_integration("telescope") then
+    return M._telescope(opts)
+  elseif config.check_integration("fzf_lua") then
+    return M._fzf_lua(opts)
+  elseif config.check_integration("mini_pick") then
+    return M._mini_pick(opts)
+  elseif config.check_integration("snacks") then
+    return M._snacks(opts)
   end
 
   return fuzzy.pick({
@@ -94,8 +92,16 @@ function M._telescope(opts)
         attach_mappings = function(prompt_bufnr)
           actions.select_default:replace(function()
             local selection = action_state.get_selected_entry()
+            local picker = action_state.get_current_picker(prompt_bufnr)
+            local prompt = picker and picker:_get_prompt() or ""
             actions.close(prompt_bufnr)
-            cb(selection and selection[1] or nil)
+            if selection and selection[1] then
+              cb(selection[1])
+            elseif opts.allow_free_text and prompt:match("%S") then
+              cb(prompt)
+            else
+              cb(nil)
+            end
           end)
           return true
         end,
@@ -121,7 +127,15 @@ function M._fzf_lua(opts)
     require("fzf-lua").fzf_exec(to_strings(opts.entries or {}), {
       prompt = (opts.prompt or "select") .. "> ",
       actions = {
-        ["default"] = function(selected) cb(selected and selected[1] or nil) end,
+        ["default"] = function(selected, opts_)
+          if selected and selected[1] then
+            cb(selected[1])
+          elseif opts.allow_free_text and opts_ and opts_.last_query and opts_.last_query:match("%S") then
+            cb(opts_.last_query)
+          else
+            cb(nil)
+          end
+        end,
       },
     })
   end
@@ -172,7 +186,18 @@ function M._snacks(opts)
       format = "text",
       confirm = function(picker, item)
         picker:close()
-        cb(item and item.text or nil)
+        if item and item.text then
+          cb(item.text)
+        elseif opts.allow_free_text then
+          local filter = picker.input and picker.input.filter and picker.input.filter.pattern
+          if type(filter) == "string" and filter:match("%S") then
+            cb(filter)
+            return
+          end
+          cb(nil)
+        else
+          cb(nil)
+        end
       end,
       on_close = function() cb(nil) end,
     })
@@ -217,14 +242,19 @@ function M.pick_bookmark(opts)
   local bookmark = require("jujutsu.jj.bookmark")
   local items = bookmark.list(cwd)
   local entries = {}
+  local seen = {}
+  local bare_names = opts.allow_free_text or opts.local_only
+
   for _, bm in ipairs(items) do
-    if not opts.local_only and bm.remote == "" then
-      local name = bm.name
-      if bm.remote ~= "" then name = name .. "@" .. bm.remote end
+    local skip = bm.remote == "git" or (opts.local_only and bm.remote ~= "") or (bare_names and seen[bm.name])
+    if not skip then
+      if bare_names then seen[bm.name] = true end
+      local name = bare_names and bm.name or (bm.remote ~= "" and (bm.name .. "@" .. bm.remote) or bm.name)
       local detail = bm.description ~= "" and bm.description or bm.change_id
       table.insert(entries, { text = string.format("%s  %s", name, detail or "") })
     end
   end
+
   local selected = M.pick({
     prompt = opts.prompt or "bookmark",
     entries = entries,
