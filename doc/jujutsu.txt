@@ -1,0 +1,112 @@
+*jujutsu.txt*  Magit-style Jujutsu interface for Neovim
+
+==============================================================================
+CONTENTS                                                     *jujutsu-contents*
+
+  1. Introduction ................ |jujutsu-intro|
+  2. Requirements ................ |jujutsu-requirements|
+  3. Setup ....................... |jujutsu-setup|
+  4. API ......................... |jujutsu-api|
+  5. Mappings .................... |jujutsu-mappings|
+  6. Integrations ................ |jujutsu-integrations|
+
+==============================================================================
+1. INTRODUCTION                                                 *jujutsu-intro*
+
+jujutsu.nvim provides a Magit-inspired UI for the Jujutsu (jj) VCS.
+
+No user commands are registered. Use the Lua API (see |jujutsu-api|).
+
+==============================================================================
+2. REQUIREMENTS                                         *jujutsu-requirements*
+
+- Neovim 0.10+
+- `jj` on PATH
+
+Optional (pick at most one per category):
+
+Diff:  diffview.nvim  or  codediff.nvim
+Pick:  telescope.nvim | fzf-lua | mini.pick | snacks.nvim
+
+Without a picker plugin, a built-in fuzzy finder is used.
+
+==============================================================================
+3. SETUP                                                         *jujutsu-setup*
+
+>
+  require("jujutsu").setup({
+    kind = "tab",
+    use_default_keymaps = true,
+    mappings = {
+      status = { ["q"] = "Close" },
+      popup = { ["c"] = "ChangePopup" },
+    },
+    integrations = {
+      telescope = nil,  -- nil = auto, true/false = force
+      fzf_lua = nil,
+      mini_pick = nil,
+      snacks = nil,
+      diffview = nil,
+      codediff = nil,
+    },
+    diff_viewer = nil,  -- "diffview" | "codediff" | nil
+    forge = { pr_integration = true },
+  })
+<
+
+Example lazy.nvim keys (no `cmd`):
+>
+  keys = {
+    { "<leader>gg", function() require("jujutsu").open() end },
+  }
+<
+
+==============================================================================
+4. API                                                             *jujutsu-api*
+
+                                                            *jujutsu.open()*
+open({opts})              Open the status buffer, or a popup if opts[1] is set.
+
+  Options: ~
+    cwd    string   repository directory
+    kind   string   tab|split|vsplit|floating|replace|auto|...
+    [1]    string   popup name (change, bookmark, log, ...)
+
+                                                           *jujutsu.close()*
+close()                   Close the status buffer.
+
+                                                         *jujutsu.refresh()*
+refresh()                 Refresh the status buffer.
+
+                                                          *jujutsu.action()*
+action({popup}, {action}, {args?})
+                          Return a function that runs a popup action.
+                          Useful for custom keymaps.
+
+                                                         *jujutsu.setup()*
+setup({opts})             Configure the plugin.
+
+==============================================================================
+5. MAPPINGS                                                   *jujutsu-mappings*
+
+Customize via `setup({ mappings = { status = {...}, popup = {...} } })`.
+Set a key to |v:false| to disable it.
+
+Popup keys (defaults): ? b c d f l m p r s u w
+
+Status context: D E O B F o x  and navigation/fold keys.
+
+==============================================================================
+6. INTEGRATIONS                                           *jujutsu-integrations*
+
+Pickers are auto-detected. Priority: telescope, fzf-lua, mini.pick, snacks,
+then the built-in finder.
+
+Diff popup action "External viewer" uses diffview or codediff when available
+(typically requires a git-colocated jj repository).
+
+Forge: when `forge.pr_integration` is true and `gh` is available, bookmarks
+may show PR numbers; `o` opens the PR or commit in the browser.
+
+==============================================================================
+vim:tw=78:ts=8:ft=help:norl:
