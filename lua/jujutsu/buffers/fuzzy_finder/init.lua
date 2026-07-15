@@ -24,12 +24,14 @@ end
 ---@field prompt? string
 ---@field entries string[]|{text:string}[]
 ---@field allow_multi? boolean
+---@field allow_free_text? boolean
 ---@field on_select fun(item: string|string[]|nil)
 
 ---@param opts FuzzyFinderOpts
 function M.open(opts)
   local prompt = opts.prompt or "select"
   local allow_multi = opts.allow_multi or false
+  local allow_free_text = opts.allow_free_text or false
   local entries = {}
   for _, e in ipairs(opts.entries or {}) do
     table.insert(entries, type(e) == "table" and (e.text or tostring(e[1])) or tostring(e))
@@ -87,7 +89,9 @@ function M.open(opts)
       local cur = i == cursor and ">" or " "
       table.insert(lines, string.format("%s%s %s", cur, mark, item.text))
     end
-    if #filtered == 0 then table.insert(lines, "  (no matches)") end
+    if #filtered == 0 then
+      table.insert(lines, allow_free_text and "  (no matches - Enter to use typed text)" or "  (no matches)")
+    end
     vim.bo[bufnr].modifiable = true
     vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
     vim.bo[bufnr].modifiable = false
@@ -105,7 +109,12 @@ function M.open(opts)
       if #list == 0 and current() then list = { current() } end
       close(#list > 0 and list or nil)
     else
-      close(current())
+      local value = current()
+      if not value and allow_free_text then
+        value = query:match("^%s*(.-)%s*$")
+        if value == "" then value = nil end
+      end
+      close(value)
     end
   end
 
@@ -186,7 +195,7 @@ function M.open(opts)
   redraw()
 end
 
----@param opts { prompt?: string, entries: any[], allow_multi?: boolean }
+---@param opts { prompt?: string, entries: any[], allow_multi?: boolean, allow_free_text?: boolean }
 ---@return string|string[]|nil
 function M.pick(opts)
   local async = require("jujutsu.async")
@@ -198,6 +207,7 @@ function M.pick(opts)
           prompt = opts.prompt,
           entries = opts.entries,
           allow_multi = opts.allow_multi,
+          allow_free_text = opts.allow_free_text,
           on_select = cb,
         })
       end
@@ -208,6 +218,7 @@ function M.pick(opts)
     prompt = opts.prompt,
     entries = opts.entries,
     allow_multi = opts.allow_multi,
+    allow_free_text = opts.allow_free_text,
     on_select = function(item)
       result = item
       done = true

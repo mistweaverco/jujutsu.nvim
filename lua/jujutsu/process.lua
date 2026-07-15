@@ -1,4 +1,5 @@
 local notify = require("jujutsu.notify")
+local spinner = require("jujutsu.spinner")
 local util = require("jujutsu.util")
 
 ---@class ProcessResult
@@ -23,6 +24,8 @@ local M = {}
 ---@return ProcessResult|nil
 function M.run(opts, cb)
   local cmd = opts.cmd
+  local show_spinner = not opts.suppress_console
+  if show_spinner then spinner.start(table.concat(cmd, " ")) end
   local start = vim.uv.now()
   local stdout, stderr = {}, {}
   local stdout_buf, stderr_buf = "", ""
@@ -49,6 +52,7 @@ function M.run(opts, cb)
   end
 
   local function finish(code)
+    if show_spinner then spinner.stop() end
     if stdout_buf ~= "" then table.insert(stdout, stdout_buf) end
     if stderr_buf ~= "" then table.insert(stderr, stderr_buf) end
     ---@type ProcessResult

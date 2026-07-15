@@ -1,4 +1,4 @@
-local Buffer = require("jujutsu.ui.buffer")
+local DiffBuffer = require("jujutsu.buffers.diff")
 local cli = require("jujutsu.jj.cli")
 local common = require("jujutsu.popups.common")
 local config = require("jujutsu.config")
@@ -6,26 +6,24 @@ local finder = require("jujutsu.finder")
 
 local M = {}
 
-local function show_diff(lines, title)
-  local buf = Buffer.create("jujutsu://diff/" .. (title or "diff"), "diff")
-  Buffer.open(buf, "tab")
-  Buffer.render(buf, lines)
-  vim.keymap.set("n", "q", function() Buffer.close(buf) end, { buffer = buf.bufnr, silent = true })
-end
-
 function M.working_copy(popup)
   local root = common.root(popup)
-  local res = cli.diff.call({ cwd = root, hidden = true, remove_ansi = false })
-  show_diff(res.stdout, "wc")
+  DiffBuffer.open({
+    cwd = root,
+    title = "wc",
+    builder = cli.diff,
+  })
 end
 
 function M.change(popup)
   local root = common.root(popup)
   local rev = common.commit(popup) or finder.pick_revision({ prompt = "Diff change", cwd = root })
-  if rev then
-    local res = cli.diff.revision(rev).call({ cwd = root, hidden = true, remove_ansi = false })
-    show_diff(res.stdout, rev)
-  end
+  if not rev then return end
+  DiffBuffer.open({
+    cwd = root,
+    title = rev,
+    builder = cli.diff.revision(rev),
+  })
 end
 
 function M.range(popup)
@@ -34,30 +32,33 @@ function M.range(popup)
   if not from then return end
   local to = finder.pick_revision({ prompt = "Diff to", cwd = root })
   if not to then return end
-  local res = cli.diff.from(from).to(to).call({ cwd = root, hidden = true, remove_ansi = false })
-  show_diff(res.stdout, from .. ".." .. to)
+  DiffBuffer.open({
+    cwd = root,
+    title = from .. ".." .. to,
+    builder = cli.diff.from(from).to(to),
+  })
 end
 
 function M.trunk(popup)
   local root = common.root(popup)
-  local res = cli.diff.from("trunk()").to("@").call({
-    cwd = root,
-    hidden = true,
-    remove_ansi = false,
-    on_error = function() return false end,
-  })
-  if res.code ~= 0 then
-    res = cli.diff.from("main").to("@").call({
+  local builders = {
+    { title = "trunk", builder = cli.diff.from("trunk()").to("@") },
+    { title = "main", builder = cli.diff.from("main").to("@") },
+    { title = "master", builder = cli.diff.from("master").to("@") },
+  }
+  for _, entry in ipairs(builders) do
+    local res = entry.builder.git.call({
       cwd = root,
       hidden = true,
-      remove_ansi = false,
+      remove_ansi = true,
       on_error = function() return false end,
     })
+    if res.code == 0 then
+      DiffBuffer.show(res.stdout, entry.title)
+      return
+    end
   end
-  if res.code ~= 0 then
-    res = cli.diff.from("master").to("@").call({ cwd = root, hidden = true, remove_ansi = false })
-  end
-  show_diff(res.stdout, "trunk")
+  DiffBuffer.show({ "(could not diff against trunk/main/master)" }, "trunk")
 end
 
 function M.diffedit(popup)

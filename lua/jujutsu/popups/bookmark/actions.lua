@@ -7,24 +7,31 @@ local M = {}
 function M.create(popup)
   local root = common.root(popup)
   local rev = common.commit(popup) or "@"
-  vim.ui.input({ prompt = "Bookmark name: " }, function(name)
-    if name and name ~= "" then
-      cli.bookmark_create.revision(rev).args(name).call({ cwd = root, hidden = false })
-      require("jujutsu").refresh()
-    end
-  end)
+  local name = finder.pick_bookmark({
+    prompt = "Bookmark name",
+    cwd = root,
+    allow_free_text = true,
+    local_only = true,
+  })
+  if name and name ~= "" then
+    cli.bookmark_create.revision(rev).args(name).call({ cwd = root, hidden = false })
+    require("jujutsu").refresh()
+  end
 end
 
 function M.set(popup)
   local root = common.root(popup)
+  local name = finder.pick_bookmark({
+    prompt = "Bookmark name",
+    cwd = root,
+    allow_free_text = true,
+    local_only = true,
+  })
+  if not name or name == "" then return end
   local rev = common.commit(popup) or finder.pick_revision({ prompt = "Set bookmark on", cwd = root })
   if not rev then return end
-  vim.ui.input({ prompt = "Bookmark name: " }, function(name)
-    if name and name ~= "" then
-      cli.bookmark_set.revision(rev).args(name).call({ cwd = root, hidden = false })
-      require("jujutsu").refresh()
-    end
-  end)
+  cli.bookmark_set.revision(rev).args(name).call({ cwd = root, hidden = false })
+  require("jujutsu").refresh()
 end
 
 function M.move(popup)

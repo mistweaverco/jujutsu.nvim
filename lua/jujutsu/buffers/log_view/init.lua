@@ -188,9 +188,13 @@ function M.open(root, revset)
     SetBookmark = function()
       local c = under_cursor()
       if not c then return end
-      vim.ui.input({ prompt = "Bookmark name: " }, function(name)
-        if name and name ~= "" then run(cli.bookmark_set.revision(c.change_id).args(name)) end
-      end)
+      local name = require("jujutsu.finder").pick_bookmark({
+        prompt = "Bookmark name",
+        cwd = root,
+        allow_free_text = true,
+        local_only = true,
+      })
+      if name and name ~= "" then run(cli.bookmark_set.revision(c.change_id).args(name)) end
     end,
   })
 

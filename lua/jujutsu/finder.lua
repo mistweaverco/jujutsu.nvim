@@ -30,6 +30,7 @@ end
 ---@field prompt? string
 ---@field entries? any[]
 ---@field allow_multi? boolean
+---@field allow_free_text? boolean
 ---@field cwd? string
 ---@field refocus_status? boolean
 
@@ -40,22 +41,24 @@ function M.pick(opts)
   opts = opts or {}
   local entries = opts.entries or {}
 
-  -- Prefer external pickers when available
-  if config.check_integration("telescope") then
-    return M._telescope(opts)
-  elseif config.check_integration("fzf_lua") then
-    return M._fzf_lua(opts)
-  elseif config.check_integration("mini_pick") then
-    return M._mini_pick(opts)
-  elseif config.check_integration("snacks") then
-    return M._snacks(opts)
+  -- Free-text entry needs the built-in picker (external pickers can't accept arbitrary input).
+  if not opts.allow_free_text then
+    if config.check_integration("telescope") then
+      return M._telescope(opts)
+    elseif config.check_integration("fzf_lua") then
+      return M._fzf_lua(opts)
+    elseif config.check_integration("mini_pick") then
+      return M._mini_pick(opts)
+    elseif config.check_integration("snacks") then
+      return M._snacks(opts)
+    end
   end
 
-  -- Built-in
   return fuzzy.pick({
     prompt = opts.prompt or "select",
     entries = entries,
     allow_multi = opts.allow_multi,
+    allow_free_text = opts.allow_free_text,
   })
 end
 
@@ -206,7 +209,7 @@ function M.pick_revision(opts)
   return vim.split(selected, "%s+")[1]
 end
 
----@param opts? { prompt?: string, cwd?: string }
+---@param opts? { prompt?: string, cwd?: string, allow_free_text?: boolean, local_only?: boolean }
 ---@return string|nil
 function M.pick_bookmark(opts)
   opts = opts or {}
@@ -215,12 +218,18 @@ function M.pick_bookmark(opts)
   local items = bookmark.list(cwd)
   local entries = {}
   for _, bm in ipairs(items) do
-    local name = bm.name
-    if bm.remote ~= "" then name = name .. "@" .. bm.remote end
-    local detail = bm.description ~= "" and bm.description or bm.change_id
-    table.insert(entries, { text = string.format("%s  %s", name, detail or "") })
+    if not opts.local_only and bm.remote == "" then
+      local name = bm.name
+      if bm.remote ~= "" then name = name .. "@" .. bm.remote end
+      local detail = bm.description ~= "" and bm.description or bm.change_id
+      table.insert(entries, { text = string.format("%s  %s", name, detail or "") })
+    end
   end
-  local selected = M.pick({ prompt = opts.prompt or "bookmark", entries = entries })
+  local selected = M.pick({
+    prompt = opts.prompt or "bookmark",
+    entries = entries,
+    allow_free_text = opts.allow_free_text,
+  })
   if not selected then return nil end
   return vim.split(selected, "%s+")[1]
 end
