@@ -9,7 +9,7 @@ local CACHE_TTL_MS = 2000
 ---@field root string|nil
 ---@field fetched_at integer
 ---@field change_id string
----@field bookmarks string[]
+---@field bookmarks string[] formatted closest bookmarks (with ahead suffix)
 ---@field added integer
 ---@field changed integer
 ---@field deleted integer
@@ -18,12 +18,11 @@ local CACHE_TTL_MS = 2000
 local cache = nil
 local autocmd_group = nil
 
-local WC_TEMPLATE = table.concat({
-  'change_id.short(8) ++ "\\x1f" ++',
-  'local_bookmarks.map(|b| b.name()).join(",") ++ "\\x1e"',
-}, " ")
+local REV_ICON = ""
+local AHEAD_ICON = "⇑"
 
-local SEP, REC = "\x1f", "\x1e"
+-- Closest bookmark(s) on ancestors of @ (oh-my-posh ClosestBookmarks).
+local CLOSEST_REVSET = "heads(::@ & bookmarks())"
 
 local function ensure_autocmds()
   if autocmd_group then return end
@@ -55,10 +54,38 @@ local function jj_run(cmd, root)
 end
 
 ---@param root string
+---@param bookmark string
+---@return integer
+local function fetch_ahead(root, bookmark)
+  if bookmark == "" then return 0 end
+  local jj = shell.resolve_jj()
+  -- Same approach as oh-my-posh: one `.` per commit in bookmark..@
+  local res = jj_run({
+    jj,
+    "--no-pager",
+    "--color=never",
+    "--ignore-working-copy",
+    "log",
+    "--no-graph",
+    "-T",
+    "'.'",
+    "-r",
+    bookmark .. "..@",
+  }, root)
+  if res.code ~= 0 then return 0 end
+  local n = 0
+  for _, line in ipairs(res.stdout or {}) do
+    if line:find(".", 1, true) then n = n + 1 end
+  end
+  return n
+end
+
+---@param root string
 ---@return string, string[]
 local function fetch_meta(root)
   local jj = shell.resolve_jj()
-  local res = jj_run({
+
+  local change_res = jj_run({
     jj,
     "--no-pager",
     "--color=never",
@@ -70,21 +97,43 @@ local function fetch_meta(root)
     "-n",
     "1",
     "-T",
-    WC_TEMPLATE,
+    "change_id.short(8)",
+  }, root)
+  local change_id = vim.trim(table.concat(change_res.stdout or {}, ""))
+
+  -- Same revset oh-my-posh uses for ClosestBookmarks.
+  local bm_res = jj_run({
+    jj,
+    "--no-pager",
+    "--color=never",
+    "--ignore-working-copy",
+    "log",
+    "-r",
+    CLOSEST_REVSET,
+    "--no-graph",
+    "-T",
+    'local_bookmarks.map(|b| b.name()).join(" ") ++ "\n"',
   }, root)
 
-  local change_id, bookmarks = "", {}
-  local text = table.concat(res.stdout or {}, "\n")
-  for rec in (text .. REC):gmatch("(.-)" .. REC) do
-    if rec ~= "" then
-      local f = vim.split(rec:gsub("\n", ""), SEP, { plain = true })
-      if f[1] and f[1] ~= "" then
-        change_id = f[1]
-        if f[2] and f[2] ~= "" then bookmarks = vim.split(f[2], ",", { plain = true }) end
-        break
+  local bookmarks = {}
+  local first_line = (bm_res.stdout or {})[1] or ""
+  first_line = vim.trim(first_line)
+  if first_line ~= "" then
+    for _, name in ipairs(vim.split(first_line, "%s+", { trimempty = true })) do
+      bookmarks[#bookmarks + 1] = name
+    end
+  end
+
+  if #bookmarks > 0 then
+    local ahead = fetch_ahead(root, bookmarks[1])
+    if ahead > 0 then
+      local suffix = " " .. AHEAD_ICON .. " " .. tostring(ahead)
+      for i, name in ipairs(bookmarks) do
+        bookmarks[i] = name .. suffix
       end
     end
   end
+
   return change_id, bookmarks
 end
 
@@ -202,7 +251,7 @@ function M.available() return workspace_root() ~= nil end
 function M.rev()
   local data = get_cache()
   if not data or data.change_id == "" then return "" end
-  return data.change_id
+  return REV_ICON .. " " .. data.change_id
 end
 
 ---@return string
