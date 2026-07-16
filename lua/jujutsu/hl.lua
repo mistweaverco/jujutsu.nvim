@@ -53,10 +53,10 @@ local function palette()
   local bg_factor = dark and 1 or -1
   local bg = get_bg("Normal") or (dark and "#22252A" or "#eeeeee")
   local fg = get_fg("Normal") or (dark and "#fcfcfc" or "#22252A")
-  local red = get_fg("Error") or get_fg("DiagnosticError") or "#E06C75"
+  local red = get_fg("DiffDelete") or get_fg("DiagnosticError") or "#E06C75"
   local orange = get_fg("SpecialChar") or get_fg("WarningMsg") or "#ffcb6b"
   local yellow = get_fg("PreProc") or "#FFE082"
-  local green = get_fg("String") or get_fg("DiagnosticOk") or "#C3E88D"
+  local green = get_fg("DiffAdd") or get_fg("DiagnosticOk") or "#C3E88D"
   local cyan = get_fg("Operator") or get_fg("DiagnosticInfo") or "#89ddff"
   local blue = get_fg("Function") or get_fg("Macro") or "#82AAFF"
   local purple = get_fg("Statement") or get_fg("Include") or "#C792EA"
