@@ -2,40 +2,192 @@ local config = require("jujutsu.config")
 
 local M = {}
 
-local NOTIFY_ID = "jujutsu-spinner"
-local FRAMES = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" }
+local SPINNER_FRAMES = { "⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷" }
+local MIN_VISIBLE_MS = 250
 
-local active = false
-local frame = 1
-local message = ""
+---@type "juu"|"block"|nil
+local backend = nil
+---@type any
+local juu_handle = nil
+---@type fun()|nil
+local block_stop = nil
+---@type integer|nil
+local started_at = nil
 
-local function tick()
-  if not active then return end
-  local icon = config.values.notification_icon or "󰊢"
-  vim.notify(string.format("%s %s %s", icon, FRAMES[frame], message), vim.log.levels.INFO, {
+local function truncate(msg, max)
+  if #msg <= max then return msg end
+  return msg:sub(1, max - 3) .. "..."
+end
+
+local function juu_available() return config.check_integration("juu") end
+
+---@param msg string
+---@return boolean
+local function start_juu(msg)
+  local ok, progress = pcall(require, "juu.progress")
+  if not ok or not progress or not progress.handle then return false end
+
+  juu_handle = progress.handle.create({
     title = "jujutsu",
-    id = NOTIFY_ID,
-    replace = true,
-    hide_from_history = true,
+    message = msg,
+    client = { name = "jujutsu" },
+    cancellable = false,
   })
-  frame = frame % #FRAMES + 1
-  vim.defer_fn(tick, 80)
+  juu_handle:report({ title = "jujutsu", message = msg })
+  backend = "juu"
+  return true
+end
+
+local function stop_juu()
+  if juu_handle then
+    pcall(function() juu_handle:finish() end)
+    juu_handle = nil
+  end
+end
+
+--- Centered floating block with animated spinner (snap.nvim-style).
+---@param text string
+---@return fun()
+local function show_loading_block(text)
+  text = truncate(text, 60)
+
+  local original_win = vim.api.nvim_get_current_win()
+  local original_mouse = vim.opt.mouse
+
+  vim.opt.mouse = ""
+  local win_width = math.min(vim.o.columns - 4, #text + 10)
+  local win_height = 3
+  local row = math.floor((vim.o.lines - win_height) / 2)
+  local col = math.floor((vim.o.columns - win_width) / 2)
+
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.bo[buf].buftype = "nofile"
+  vim.bo[buf].bufhidden = "wipe"
+  vim.bo[buf].swapfile = false
+
+  local win = vim.api.nvim_open_win(buf, true, {
+    relative = "editor",
+    style = "minimal",
+    border = "rounded",
+    row = row,
+    col = col,
+    width = win_width,
+    height = win_height,
+    zindex = 300,
+    focusable = true,
+  })
+
+  local map_opts = { buffer = buf, noremap = true, silent = true }
+  vim.keymap.set("n", "<Esc>", "<Nop>", map_opts)
+
+  local frame_idx = 1
+  local timer = vim.uv.new_timer()
+
+  vim.api.nvim_buf_set_lines(buf, 1, 2, false, { string.format("  %s  %s", SPINNER_FRAMES[frame_idx], text) })
+  vim.cmd("redraw")
+
+  local update_callback = vim.schedule_wrap(function()
+    if not vim.api.nvim_win_is_valid(win) then
+      if timer and not timer:is_closing() then
+        timer:stop()
+        timer:close()
+      end
+      return
+    end
+
+    while vim.fn.getchar(0) ~= 0 do
+      -- Discard buffered keypresses while the command runs
+    end
+
+    local line = string.format("  %s  %s", SPINNER_FRAMES[frame_idx], text)
+    vim.api.nvim_buf_set_lines(buf, 1, 2, false, { line })
+    frame_idx = (frame_idx % #SPINNER_FRAMES) + 1
+  end)
+
+  timer:start(0, 80, update_callback)
+
+  return function()
+    if timer then
+      timer:stop()
+      if not timer:is_closing() then timer:close() end
+    end
+    vim.opt.mouse = original_mouse
+    if vim.api.nvim_win_is_valid(original_win) then vim.api.nvim_set_current_win(original_win) end
+    if vim.api.nvim_win_is_valid(win) then vim.api.nvim_win_close(win, true) end
+  end
+end
+
+---@param msg string
+local function start_block(msg)
+  block_stop = show_loading_block(msg)
+  backend = "block"
+end
+
+local function stop_block()
+  if block_stop then
+    block_stop()
+    block_stop = nil
+  end
 end
 
 ---@param msg? string
-function M.start(msg)
-  if config.values.process_spinner == false then return end
+---@param on_ready? fun()
+function M.start(msg, on_ready)
+  if config.values.process_spinner == false then
+    if on_ready then on_ready() end
+    return
+  end
+
   M.stop()
-  active = true
-  frame = 1
-  message = msg or "Running…"
-  tick()
+  msg = msg or "Running…"
+  started_at = vim.uv.now()
+
+  local function ready()
+    vim.schedule(function()
+      if on_ready then on_ready() end
+    end)
+  end
+
+  if juu_available() and start_juu(msg) then
+    ready()
+    return
+  end
+
+  -- Important: in some call sites we block using `vim.wait()`, so relying on
+  -- `vim.schedule()` to create the floating window can prevent the UI from
+  -- painting. Start the block immediately, but keep `on_ready()` scheduled.
+  start_block(msg)
+  ready()
 end
 
-function M.stop()
-  if not active then return end
-  active = false
-  pcall(vim.notify, nil, vim.log.levels.INFO, { id = NOTIFY_ID, replace = true, hide_from_history = true })
+---@param cb? fun()
+function M.stop(cb)
+  local function cleanup()
+    if backend == "juu" then
+      stop_juu()
+    elseif backend == "block" then
+      stop_block()
+    end
+    backend = nil
+    started_at = nil
+    if cb then cb() end
+  end
+
+  if not backend or not started_at then
+    cleanup()
+    return
+  end
+
+  local elapsed = vim.uv.now() - started_at
+  if elapsed < MIN_VISIBLE_MS then
+    vim.defer_fn(cleanup, MIN_VISIBLE_MS - elapsed)
+    return
+  end
+
+  cleanup()
 end
+
+---@return boolean
+function M.active() return backend ~= nil end
 
 return M

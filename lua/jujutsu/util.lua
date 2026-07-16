@@ -49,4 +49,55 @@ function M.expand(path) return vim.fn.expand(path) end
 ---@return string
 function M.normalize_path(dir) return vim.fn.fnamemodify(dir, ":p"):gsub("/$", "") end
 
+--- Human-readable label for a jj command (never the full argv string).
+---@param cmd string[]
+---@return string
+function M.command_label(cmd)
+  local i = 1
+  while i <= #cmd do
+    local p = cmd[i]
+    if p == "--no-pager" or p == "--color=never" or p == "--ignore-working-copy" then
+      i = i + 1
+    elseif p == "jj" or p:match("/jj$") then
+      i = i + 1
+    else
+      break
+    end
+  end
+
+  local verb = cmd[i]
+  local sub = cmd[i + 1]
+
+  if verb == "git" and sub == "push" then return "Pushing…" end
+  if verb == "git" and sub == "fetch" then return "Fetching…" end
+  if verb == "bookmark" then
+    local labels = {
+      create = "Creating bookmark…",
+      set = "Setting bookmark…",
+      move = "Moving bookmark…",
+      delete = "Deleting bookmark…",
+      forget = "Forgetting bookmark…",
+      track = "Tracking bookmark…",
+      untrack = "Untracking bookmark…",
+      rename = "Renaming bookmark…",
+    }
+    return labels[sub] or "Updating bookmark…"
+  end
+  if verb == "restore" then return "Restoring…" end
+  if verb == "abandon" then return "Abandoning change…" end
+  if verb == "describe" then return "Updating description…" end
+  if verb == "new" then return "Creating change…" end
+  if verb == "edit" then return "Editing change…" end
+  if verb == "commit" then return "Committing…" end
+  if verb == "squash" then return "Squashing…" end
+  if verb == "rebase" then return "Rebasing…" end
+  if verb == "split" then return "Splitting change…" end
+  if verb == "workspace" then return "Updating workspace…" end
+  if verb == "file" and sub == "untrack" then return "Untracking file…" end
+  if verb == "git" and sub == "remote" then return "Updating remote…" end
+  if verb == "diffedit" then return "Opening diffedit…" end
+
+  return "Running…"
+end
+
 return M

@@ -2,7 +2,6 @@ local Buffer = require("jujutsu.ui.buffer")
 local cli = require("jujutsu.jj.cli")
 local common = require("jujutsu.popups.common")
 local finder = require("jujutsu.finder")
-local notify = require("jujutsu.notify")
 
 local M = {}
 
@@ -13,7 +12,6 @@ function M.add(popup)
     vim.ui.input({ prompt = "Remote URL: " }, function(url)
       if url and url ~= "" then
         cli.git_remote_add.args(name, url).call({ cwd = root, hidden = false })
-        notify.info("Added remote " .. name)
         require("jujutsu").refresh()
       end
     end)

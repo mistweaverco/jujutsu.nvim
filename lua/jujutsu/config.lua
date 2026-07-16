@@ -70,6 +70,7 @@ local defaults = {
     fzf_lua = nil,
     mini_pick = nil,
     snacks = nil,
+    juu = nil,
   },
   diff_viewer = nil,
   forge = {
@@ -211,6 +212,7 @@ function M.check_integration(name)
     snacks = "snacks",
     diffview = "diffview",
     codediff = "codediff",
+    juu = "juu.progress",
   }
   local mod = modules[name]
   if not mod then return false end

@@ -1,3 +1,4 @@
+local config = require("jujutsu.config")
 local notify = require("jujutsu.notify")
 local spinner = require("jujutsu.spinner")
 local util = require("jujutsu.util")
@@ -19,26 +20,52 @@ local util = require("jujutsu.util")
 
 local M = {}
 
+---@param res ProcessResult
+---@return boolean
+local function has_output(res) return #util.trim_blank(res.stdout) > 0 or #util.trim_blank(res.stderr) > 0 end
+
+---@param res ProcessResult
+---@param ok boolean
+---@param suppress_console boolean
+---@param had_spinner boolean
+---@return boolean
+local function should_show_console(res, ok, suppress_console, had_spinner)
+  if suppress_console or not config.values.auto_show_console then return false end
+  local when = config.values.auto_show_console_on or "output"
+  if when == "never" then return false end
+  if when == "always" then return true end
+  if when == "error" then return not ok end
+  -- Successful spinner-backed commands should not pop a console split afterward.
+  if had_spinner and ok then return false end
+  return has_output(res)
+end
+
+---@param res ProcessResult
+local function show_error(res)
+  local err = table.concat(util.remove_ansi_lines(util.trim_blank(res.stderr)), "\n")
+  if err == "" then err = table.concat(util.remove_ansi_lines(util.trim_blank(res.stdout)), "\n") end
+  if err ~= "" then notify.error(err) end
+end
+
 ---@param opts ProcessOpts
 ---@param cb? fun(res: ProcessResult)
 ---@return ProcessResult|nil
 function M.run(opts, cb)
   local cmd = opts.cmd
-  local show_spinner = not opts.suppress_console
-  if show_spinner then spinner.start(table.concat(cmd, " ")) end
+  local suppress_console = opts.suppress_console == true
+  local show_spinner = not suppress_console
+  local had_spinner = false
   local start = vim.uv.now()
   local stdout, stderr = {}, {}
   local stdout_buf, stderr_buf = "", ""
 
   local function append(acc, buf, data)
     if not data or data == "" then return buf end
-    -- vim.system may pass a string; coerce defensively
     if type(data) ~= "string" then data = tostring(data) end
     buf = buf .. data
     while true do
       local nl = buf:find("\n", 1, true)
       if not nl then break end
-      -- gsub returns (str, count); parens discard the count so insert gets one value
       table.insert(acc, (buf:sub(1, nl - 1):gsub("\r$", "")))
       buf = buf:sub(nl + 1)
     end
@@ -51,8 +78,18 @@ function M.run(opts, cb)
     env.TERM = env.TERM or "xterm-256color"
   end
 
+  local sync_done, sync_result = false, nil
+
+  local function deliver(res)
+    if cb then
+      cb(res)
+    else
+      sync_result = res
+      sync_done = true
+    end
+  end
+
   local function finish(code)
-    if show_spinner then spinner.stop() end
     if stdout_buf ~= "" then table.insert(stdout, stdout_buf) end
     if stderr_buf ~= "" then table.insert(stderr, stderr_buf) end
     ---@type ProcessResult
@@ -64,48 +101,55 @@ function M.run(opts, cb)
       cmd = table.concat(cmd, " "),
     }
 
-    if code ~= 0 and not opts.suppress_console then
-      local on_error = opts.on_error
-      local show = true
-      if on_error then show = on_error(res) end
-      if show then
-        local err = table.concat(util.remove_ansi_lines(util.trim_blank(stderr)), "\n")
-        if err == "" then err = table.concat(util.remove_ansi_lines(util.trim_blank(stdout)), "\n") end
-        if err ~= "" then notify.error(err) end
+    local ok = code == 0
+    local function after_spinner()
+      if not suppress_console then
+        if should_show_console(res, ok, suppress_console, had_spinner) then
+          require("jujutsu.buffers.process").show_result(res)
+        elseif not ok then
+          local show = true
+          if opts.on_error then show = opts.on_error(res) end
+          if show then show_error(res) end
+        end
       end
+
+      pcall(function() require("jujutsu.history").push(res) end)
+      deliver(res)
     end
 
-    -- Record in command history
-    pcall(function() require("jujutsu.history").push(res) end)
-
-    if cb then cb(res) end
-    return res
+    if had_spinner then
+      spinner.stop(after_spinner)
+    else
+      after_spinner()
+    end
   end
 
   local sys_opts = {
     cwd = opts.cwd,
     stdin = opts.input,
     text = true,
+    stdout = function(_, data) stdout_buf = append(stdout, stdout_buf, data) end,
+    stderr = function(_, data) stderr_buf = append(stderr, stderr_buf, data) end,
   }
   if env then sys_opts.env = env end
 
-  if cb then
-    sys_opts.stdout = function(_, data) stdout_buf = append(stdout, stdout_buf, data) end
-    sys_opts.stderr = function(_, data) stderr_buf = append(stderr, stderr_buf, data) end
+  local function launch()
     vim.system(cmd, sys_opts, function(obj)
       vim.schedule(function() finish(obj.code) end)
     end)
-    return nil
   end
 
-  -- Sync
-  local obj = vim.system(cmd, sys_opts):wait()
-  stdout = vim.split(obj.stdout or "", "\n", { plain = true })
-  stderr = vim.split(obj.stderr or "", "\n", { plain = true })
-  -- Drop trailing empty from split
-  if stdout[#stdout] == "" then table.remove(stdout) end
-  if stderr[#stderr] == "" then table.remove(stderr) end
-  return finish(obj.code)
+  if show_spinner then
+    had_spinner = true
+    spinner.start(util.command_label(cmd), launch)
+  else
+    launch()
+  end
+
+  if cb then return nil end
+
+  vim.wait(1000 * 60 * 10, function() return sync_done end, 20)
+  return sync_result
 end
 
 ---Run and await inside async coroutine.

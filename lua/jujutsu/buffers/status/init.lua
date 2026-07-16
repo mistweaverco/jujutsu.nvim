@@ -19,6 +19,7 @@ local watcher = require("jujutsu.watcher")
 
 local M = {}
 
+--luacheck: ignore
 ---@type { buf: table, root: string, data: StatusData|nil, items: StatusItem[], line_map: table<integer, StatusItem>, folds: table<string, boolean>, open_diffs: table<string, boolean>, refreshing: boolean }|nil
 local instance
 

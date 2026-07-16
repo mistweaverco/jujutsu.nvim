@@ -3,7 +3,6 @@ local cli = require("jujutsu.jj.cli")
 local common = require("jujutsu.popups.common")
 local config = require("jujutsu.config")
 local finder = require("jujutsu.finder")
-local notify = require("jujutsu.notify")
 
 local M = {}
 
@@ -28,7 +27,6 @@ function M.quick_add(popup)
     local init = config.values.workspace_initialize_command
     if init then vim.fn.system(init:gsub("{path}", path)) end
     cli.workspace_add.name(name).args(path).call({ cwd = root, hidden = false })
-    notify.info("Added workspace " .. path)
     local cmd = config.values.workspace_open_command
     if cmd then vim.fn.system(cmd:gsub("{path}", path)) end
     require("jujutsu").refresh()

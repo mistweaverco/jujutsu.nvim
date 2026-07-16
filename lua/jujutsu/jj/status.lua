@@ -57,6 +57,7 @@ local REAL_REC = "\x1e"
 ---@field files FileStatus[]
 ---@field conflicts string[]
 ---@field recent ChangeInfo[]
+--luacheck: ignore
 ---@field bookmarks { name: string, remote: string, change_id: string, commit_id: string, description: string, target: string, conflict: boolean, deleted: boolean }[]
 ---@field root string
 
