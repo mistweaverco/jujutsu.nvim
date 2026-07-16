@@ -40,6 +40,7 @@ local popup_module = {
   PushPopup = "push",
   RebasePopup = "rebase",
   SquashPopup = "squash",
+  SplitPopup = "split",
   UndoPopup = "undo",
   WorkspacePopup = "workspace",
 }

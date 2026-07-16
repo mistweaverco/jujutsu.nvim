@@ -94,9 +94,9 @@ Set a key to |v:false| to disable it.
 
 Popup keys (defaults): ? b c d f l m p r s u w
 
-Status context: D E O B F S o x  and navigation/fold keys.
+Status context: D E O B F P S o x  and navigation/fold keys.
 
-Log view: `<cr>` open commit, `S` open `--stat` view.
+Log view: `<cr>` open commit, `S` open `--stat` view, `P` split popup.
 
 ==============================================================================
 6. INTEGRATIONS                                           *jujutsu-integrations*

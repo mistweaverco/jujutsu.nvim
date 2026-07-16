@@ -47,6 +47,7 @@ local popup_names = {
   rebase = true,
   remote = true,
   squash = true,
+  split = true,
   undo = true,
   workspace = true,
 }

@@ -62,8 +62,19 @@ define_command("squash", {
   options = { revision = "-r", from = "--from", into = "--into", message = "-m" },
 })
 define_command("split", {
-  flags = { interactive = "-i" },
-  options = { revision = "-r" },
+  flags = {
+    interactive = "-i",
+    parallel = "--parallel",
+    editor = "--editor",
+  },
+  options = {
+    revision = "-r",
+    message = "-m",
+    tool = "--tool",
+    onto = "--onto",
+    insert_after = "--insert-after",
+    insert_before = "--insert-before",
+  },
 })
 define_command("edit", {})
 define_command("abandon", {})
@@ -231,11 +242,13 @@ local function new_builder(command, config)
   }, mt_builder)
 end
 
-function M._build_cmd(tbl)
+function M._build_cmd(tbl, opts)
+  opts = opts or {}
   local state = rawget(tbl, k_state)
   local command = rawget(tbl, k_command)
   local jj_bin = require("jujutsu.jj.shell").resolve_jj()
-  local cmd = { jj_bin, "--no-pager", "--color=never" }
+  local color = opts.color or "never"
+  local cmd = { jj_bin, "--no-pager", "--color=" .. color }
 
   if readonly_commands[command] then table.insert(cmd, "--ignore-working-copy") end
 
@@ -245,7 +258,10 @@ function M._build_cmd(tbl)
 
   vim.list_extend(cmd, state.options)
   vim.list_extend(cmd, state.arguments)
-  if #state.files > 0 then vim.list_extend(cmd, state.files) end
+  if #state.files > 0 then
+    table.insert(cmd, "--")
+    vim.list_extend(cmd, state.files)
+  end
 
   return cmd
 end
