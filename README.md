@@ -4,12 +4,15 @@
 
 # jujutsu.nvim
 
-A Magit-style [Jujutsu (jj)](https://github.com/jj-vcs/jj) interface for Neovim.
+A Magit-style [Jujutsu (jj)](https://github.com/jj-vcs/jj)
+interface for Neovim.
 
 ---
 
 Inspired by Neogit,
 rewritten without required plugin dependencies.
+
+![jujutsu.nvim promo image](assets/jujutsu.nvim-opengraph-image.png)
 
 </div>
 
