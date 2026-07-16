@@ -189,8 +189,11 @@ function M.open(root, rev)
   Buffer.open(buf, config.values.commit_view.kind or "vsplit")
   Buffer.render(buf, lines, highlights)
 
-  vim.keymap.set("n", "q", function() Buffer.close(buf) end, { buffer = buf.bufnr, silent = true })
-  vim.keymap.set("n", "<esc>", function() Buffer.close(buf) end, { buffer = buf.bufnr, silent = true })
+  local mappings = require("jujutsu.ui.mappings")
+  mappings.apply(buf.bufnr, "commit_view", {
+    Close = function() Buffer.close(buf) end,
+    OpenStat = function() require("jujutsu.buffers.stat_view").open(root, rev) end,
+  })
 end
 
 return M

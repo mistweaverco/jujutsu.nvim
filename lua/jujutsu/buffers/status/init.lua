@@ -548,6 +548,13 @@ local function bind_actions(bufnr)
         require("jujutsu.buffers.commit_view").open(instance.root, change.change_id)
       end
     end,
+    OpenStat = function()
+      local item = item_under_cursor()
+      local change = get_change_from_item(item) or (instance.data and instance.data.working_copy)
+      if change and change.change_id and change.change_id ~= "" then
+        require("jujutsu.buffers.stat_view").open(instance.root, change.change_id)
+      end
+    end,
     VSplitOpen = function()
       local item = item_under_cursor()
       local path = item and item.data and (item.data.file and item.data.file.path or item.data.path)

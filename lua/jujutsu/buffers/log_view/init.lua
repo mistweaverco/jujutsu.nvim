@@ -156,6 +156,10 @@ function M.open(root, revset)
       local c = under_cursor()
       if c then require("jujutsu.buffers.commit_view").open(root, c.change_id) end
     end,
+    OpenStat = function()
+      local c = under_cursor()
+      if c then require("jujutsu.buffers.stat_view").open(root, c.change_id) end
+    end,
     Edit = function()
       local c = under_cursor()
       if c then run(cli.edit.args(c.change_id)) end

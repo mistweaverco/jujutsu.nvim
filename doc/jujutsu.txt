@@ -94,7 +94,9 @@ Set a key to |v:false| to disable it.
 
 Popup keys (defaults): ? b c d f l m p r s u w
 
-Status context: D E O B F o x  and navigation/fold keys.
+Status context: D E O B F S o x  and navigation/fold keys.
+
+Log view: `<cr>` open commit, `S` open `--stat` view.
 
 ==============================================================================
 6. INTEGRATIONS                                           *jujutsu-integrations*
@@ -107,6 +109,25 @@ Diff popup action "External viewer" uses diffview or codediff when available
 
 Forge: when `forge.pr_integration` is true and `gh` is available, bookmarks
 may show PR numbers; `o` opens the PR or commit in the browser.
+
+Lualine: >
+  require("lualine").setup({
+    sections = {
+      lualine_b = require("jujutsu.lualine").prepend({ "branch" }),
+      lualine_x = require("jujutsu.lualine").append({
+        "encoding",
+        "fileformat",
+        "filetype",
+      }),
+    },
+  })
+<
+`components()` returns a list - use `.prepend()` / `.append()` (or
+`vim.list_extend`) to flatten it into a section. Do not nest the list as a
+single entry (that causes "attempt to call a table value").
+Repo-wide working-copy `+`/`~`/`-` line counts (refreshed on write / cwd /
+focus, not BufEnter). Also: `.component()`, `.rev()`, `.bookmark()`, `.diff()`,
+`.status()`.
 
 ==============================================================================
 vim:tw=78:ts=8:ft=help:norl:
