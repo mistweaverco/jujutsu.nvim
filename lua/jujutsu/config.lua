@@ -56,6 +56,7 @@ local defaults = {
     spell_check = true,
   },
   commit_view = { kind = "vsplit" },
+  stat_view = { kind = "vsplit" },
   log_view = { kind = "tab" },
   popup = { kind = "split" },
   signs = {
@@ -148,6 +149,7 @@ local defaults = {
       ["O"] = "NewOn",
       ["B"] = "NewBefore",
       ["F"] = "ForgetBookmark",
+      ["S"] = "OpenStat",
       ["o"] = "OpenBrowser",
       ["{"] = "GoToPreviousHunkHeader",
       ["}"] = "GoToNextHunkHeader",
@@ -157,12 +159,18 @@ local defaults = {
     log_view = {
       ["q"] = "Close",
       ["<cr>"] = "OpenCommit",
+      ["S"] = "OpenStat",
       ["E"] = "Edit",
       ["O"] = "NewOn",
       ["D"] = "Describe",
       ["x"] = "Abandon",
       ["b"] = "SetBookmark",
       ["<c-r>"] = "RefreshBuffer",
+    },
+    commit_view = {
+      ["q"] = "Close",
+      ["<esc>"] = "Close",
+      ["S"] = "OpenStat",
     },
   },
 }

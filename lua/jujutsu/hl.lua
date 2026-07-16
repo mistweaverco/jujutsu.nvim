@@ -55,7 +55,7 @@ local function palette()
   local fg = get_fg("Normal") or (dark and "#fcfcfc" or "#22252A")
   local red = get_fg("DiffDelete") or get_fg("DiagnosticError") or "#E06C75"
   local orange = get_fg("SpecialChar") or get_fg("WarningMsg") or "#ffcb6b"
-  local yellow = get_fg("PreProc") or "#FFE082"
+  local yellow = get_fg("DiffChange") or "#FFE082"
   local green = get_fg("DiffAdd") or get_fg("DiagnosticOk") or "#C3E88D"
   local cyan = get_fg("Operator") or get_fg("DiagnosticInfo") or "#89ddff"
   local blue = get_fg("Function") or get_fg("Macro") or "#82AAFF"
@@ -100,6 +100,7 @@ function M.setup()
     JujutsuFold = { fg = p.grey, bold = p.bold },
     JujutsuBranch = { fg = p.blue, bold = p.bold },
     JujutsuRemoteBranch = { fg = p.green, bold = p.bold },
+    JujutsuTag = { fg = p.orange, bold = p.bold },
     JujutsuChangeId = { fg = p.purple },
     JujutsuChangeIdPrefix = { fg = p.purple, bold = p.bold },
     JujutsuChangeIdRest = { fg = p.cyan },
@@ -132,6 +133,17 @@ function M.setup()
     JujutsuCursorLine = { link = "CursorLine" },
     JujutsuObjectSelected = { link = "Visual" },
     JujutsuForgePR = { fg = p.purple, bold = p.bold },
+    JujutsuStatGraph = { fg = p.grey },
+    JujutsuStatAdd = { fg = p.bg_green, bold = p.bold },
+    JujutsuStatDelete = { fg = p.bg_red, bold = p.bold },
+    JujutsuStatSigGood = { fg = p.bg_green, bold = p.bold },
+    JujutsuStatSigBad = { fg = p.bg_red, bold = p.bold },
+    JujutsuStatSigUnknown = { fg = p.yellow, bold = p.bold },
+    JujutsuLualineAdd = { fg = p.bg_green, bold = p.bold },
+    JujutsuLualineChange = { fg = p.yellow, bold = p.bold },
+    JujutsuLualineDelete = { fg = p.bg_red, bold = p.bold },
+    JujutsuLualineRev = { fg = p.cyan, bold = p.bold },
+    JujutsuLualineBookmark = { fg = p.blue, bold = p.bold },
   }
 
   for name, opts in pairs(groups) do

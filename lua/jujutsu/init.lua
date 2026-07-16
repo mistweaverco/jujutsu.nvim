@@ -95,6 +95,7 @@ end
 function M.refresh()
   local status = require("jujutsu.buffers.status")
   if status.instance() then status.refresh() end
+  pcall(function() require("jujutsu.lualine").refresh() end)
 end
 
 function M.focus()

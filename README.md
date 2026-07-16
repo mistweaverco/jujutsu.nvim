@@ -149,12 +149,62 @@ recent commits, and bookmarks.
 | `O` | New change on revision |
 | `B` | New change before |
 | `F` | Forget / track bookmark |
+| `S` | Open `--stat` view for change under cursor |
 | `o` | Open in browser (forge) |
 | `x` | Discard file / abandon change / delete bookmark |
 | `q` | Close |
 | `<C-r>` | Refresh |
 | `<Tab>` | Toggle section / file diff |
-| `<CR>` | Open file |
+| `<CR>` | Open file / commit |
+
+In the log view, `S` also opens the `--stat` view for the revision under the cursor.
+
+Remap with:
+
+```lua
+require("jujutsu").setup({
+  mappings = {
+    status = { ["S"] = "OpenStat" },
+    log_view = { ["S"] = "OpenStat" },
+  },
+  stat_view = { kind = "vsplit" }, -- or "tab" / "split"
+})
+```
+
+## Lualine
+
+Colored `+` / `~` / `-` **line** counts for the working-copy diff (repo-wide),
+plus the working-copy change id and bookmark when present.
+Uses lualine's `color` API so the **section background is preserved**.
+Counts refresh on write / cwd change / focus (not every buffer switch).
+
+**Important:** `components()` returns a *list* of components. Flatten it into the
+section - do not put the list itself as one entry.
+
+```lua
+require("lualine").setup({
+  sections = {
+    -- jj widgets first, then your items:
+    lualine_b = require("jujutsu.lualine").prepend({ "branch" }),
+
+    -- your items first, then jj widgets:
+    lualine_x = require("jujutsu.lualine").append({
+      "kulala",
+      "encoding",
+      "fileformat",
+      "filetype",
+    }),
+
+    -- or flatten manually:
+    -- lualine_b = vim.list_extend({ "branch" }, require("jujutsu.lualine").components()),
+
+    -- single plain component (one color, safe as `{ ... }`):
+    -- lualine_b = { require("jujutsu.lualine").component() },
+  },
+})
+```
+
+Helpers: `require("jujutsu.lualine").rev()`, `.bookmark()`, `.diff()`, `.status()`.
 
 
 Override any mapping in `setup({ mappings = ... })`, or set `use_default_keymaps = false` and define all yourself.
