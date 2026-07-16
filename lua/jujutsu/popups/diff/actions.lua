@@ -63,7 +63,7 @@ end
 
 function M.diffedit(popup)
   local rev = common.commit(popup) or "@"
-  common.run(popup, cli.diffedit.revision(rev))
+  common.run_interactive(popup, cli.diffedit.revision(rev), { title = " jj diffedit " })
 end
 
 function M.external(popup)

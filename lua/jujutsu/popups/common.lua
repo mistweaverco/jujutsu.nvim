@@ -1,3 +1,5 @@
+local cli = require("jujutsu.jj.cli")
+
 local M = {}
 
 ---@return string
@@ -19,6 +21,25 @@ end
 function M.run(popup, builder)
   local res = builder.call_async({ cwd = M.root(popup), hidden = false })
   return res
+end
+
+---Run a jj command in a real terminal (needed for `:builtin` / interactive TUIs).
+---Closes the popup first so it does not steal focus from the terminal.
+---@param popup table
+---@param builder any
+---@param opts? { title?: string }
+function M.run_interactive(popup, builder, opts)
+  opts = opts or {}
+  local cmd = cli._build_cmd(builder, { color = "auto" })
+  local cwd = M.root(popup)
+  local title = opts.title or (" " .. table.concat(cmd, " ", 2) .. " ")
+  if popup and popup.close then popup:close() end
+  vim.schedule(function()
+    require("jujutsu.term").run(cmd, {
+      cwd = cwd,
+      title = title,
+    })
+  end)
 end
 
 return M

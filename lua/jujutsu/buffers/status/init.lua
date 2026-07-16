@@ -224,7 +224,7 @@ local function build_items()
         data = { file = file },
       })
       if open and file.diff then
-        for _, dline in ipairs(file.diff) do
+        for di, dline in ipairs(file.diff) do
           -- Classify git-format diff lines (neoJJ-style line backgrounds)
           local line_hl = "JujutsuDiffContext"
           local first = dline:sub(1, 1)
@@ -246,7 +246,7 @@ local function build_items()
             type = "diff",
             text = "    " .. dline,
             line_hl = line_hl,
-            data = { file = file },
+            data = { file = file, diff_index = di },
           })
         end
       end
@@ -448,15 +448,95 @@ local function run_jj(fn)
   end)
 end
 
-local function get_env()
+---Capture file/hunk selection from the cursor or active visual range.
+---Call this while visual mode is still active (e.g. before opening a popup).
+---@return { path: string, mode: "file"|"hunks", hunk_indices: integer[], file: FileStatus }|nil
+function M.capture_selection()
+  if not instance or not instance.line_map then return nil end
+
+  local mode = vim.fn.mode()
+  local first, last = vim.fn.line("."), vim.fn.line(".")
+  if mode == "v" or mode == "V" or mode == "\22" then
+    first = vim.fn.line("v")
+    last = vim.fn.line(".")
+    if first > last then
+      first, last = last, first
+    end
+    vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "nx", false)
+  end
+
+  ---@type table<string, { file: FileStatus, on_file: boolean, hunks: table<integer, boolean> }>
+  local by_path = {}
+  for row = first, last do
+    local it = instance.line_map[row]
+    if it and it.data and it.data.file then
+      local file = it.data.file
+      local path = file.path
+      by_path[path] = by_path[path] or { file = file, on_file = false, hunks = {} }
+      if it.type == "file" then
+        by_path[path].on_file = true
+      elseif it.type == "diff" and file.diff and it.data.diff_index then
+        local parsed = require("jujutsu.diff.hunks").parse_hunks(file.diff)
+        local idx = require("jujutsu.diff.hunks").hunk_index_at(parsed, it.data.diff_index)
+        if idx ~= nil then by_path[path].hunks[idx] = true end
+      end
+    end
+  end
+
+  -- Prefer the path under the anchor cursor/end of selection.
+  local prefer = instance.line_map[last] or instance.line_map[first]
+  local prefer_path = prefer and prefer.data and prefer.data.file and prefer.data.file.path
+
+  local path = prefer_path
+  if not path or not by_path[path] then
+    path = next(by_path)
+  end
+  if not path then return nil end
+
+  local entry = by_path[path]
+  local indices = {}
+  for idx in pairs(entry.hunks) do
+    indices[#indices + 1] = idx
+  end
+  table.sort(indices)
+
+  if #indices > 0 then
+    return {
+      path = path,
+      mode = "hunks",
+      hunk_indices = indices,
+      file = entry.file,
+    }
+  end
+  if entry.on_file or (prefer and prefer.type == "file") then
+    return {
+      path = path,
+      mode = "file",
+      hunk_indices = {},
+      file = entry.file,
+    }
+  end
+  -- Cursor on a diff header line with no hunk match → treat as file
+  return {
+    path = path,
+    mode = "file",
+    hunk_indices = {},
+    file = entry.file,
+  }
+end
+
+local function get_env(opts)
+  opts = opts or {}
   local item = item_under_cursor()
   local change = get_change_from_item(item)
-  return {
+  local env = {
     item = item,
     change = change,
     commit = change and change.change_id or nil,
     root = instance and instance.root,
   }
+  if opts.with_selection then env.selection = M.capture_selection() end
+  return env
 end
 
 local function bind_actions(bufnr)
@@ -633,6 +713,9 @@ local function bind_actions(bufnr)
         )
       end
     end,
+    Split = function()
+      require("jujutsu.popups.split").create(get_env({ with_selection = true }))
+    end,
     NewOn = function()
       local item = item_under_cursor()
       local change = get_change_from_item(item)
@@ -726,6 +809,18 @@ local function bind_actions(bufnr)
 
   mappings.apply(bufnr, "status", actions)
   mappings.apply_popup_maps(bufnr, get_env)
+  -- Visual-mode Split so hunk ranges can be selected before opening the popup.
+  local status_maps = require("jujutsu.config").values.mappings.status or {}
+  for key, name in pairs(status_maps) do
+    if name == "Split" and actions.Split then
+      vim.keymap.set("x", key, actions.Split, {
+        buffer = bufnr,
+        silent = true,
+        noremap = true,
+        desc = "jujutsu: Split",
+      })
+    end
+  end
 end
 
 ---@param root string

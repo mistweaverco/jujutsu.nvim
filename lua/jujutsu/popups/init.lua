@@ -10,6 +10,7 @@ return {
   push = require("jujutsu.popups.push"),
   rebase = require("jujutsu.popups.rebase"),
   squash = require("jujutsu.popups.squash"),
+  split = require("jujutsu.popups.split"),
   undo = require("jujutsu.popups.undo"),
   workspace = require("jujutsu.popups.workspace"),
 }

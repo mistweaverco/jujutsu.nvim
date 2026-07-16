@@ -149,6 +149,7 @@ recent commits, and bookmarks.
 | `O` | New change on revision |
 | `B` | New change before |
 | `F` | Forget / track bookmark |
+| `P` | Split change (opens split popup; visual-select hunks then `P`→`f`) |
 | `S` | Open `--stat` view for change under cursor |
 | `o` | Open in browser (forge) |
 | `x` | Discard file / abandon change / delete bookmark |
@@ -157,15 +158,17 @@ recent commits, and bookmarks.
 | `<Tab>` | Toggle section / file diff |
 | `<CR>` | Open file / commit |
 
-In the log view, `S` also opens the `--stat` view for the revision under the cursor.
+In the log view, `S` opens the `--stat` view and `P` opens the split popup for the
+revision under the cursor.
 
 Remap with:
 
 ```lua
 require("jujutsu").setup({
   mappings = {
-    status = { ["S"] = "OpenStat" },
-    log_view = { ["S"] = "OpenStat" },
+    status = { ["P"] = "Split" },
+    log_view = { ["P"] = "Split" },
+    -- or bind a popup key: popup = { ["P"] = "SplitPopup" },
   },
   stat_view = { kind = "vsplit" }, -- or "tab" / "split"
 })
@@ -174,7 +177,9 @@ require("jujutsu").setup({
 ## Lualine
 
 Colored `+` / `~` / `-` **line** counts for the working-copy diff (repo-wide),
-plus the working-copy change id and bookmark when present.
+plus the working-copy change id (prefixed with ``) and the **closest**
+bookmark(s) on ancestors of `@` (oh-my-posh-style, with an ahead counter when
+you are not on the bookmark).
 Uses lualine's `color` API so the **section background is preserved**.
 Counts refresh on write / cwd change / focus (not every buffer switch).
 

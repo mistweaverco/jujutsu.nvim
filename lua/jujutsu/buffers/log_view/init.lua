@@ -164,6 +164,14 @@ function M.open(root, revset)
       local c = under_cursor()
       if c then run(cli.edit.args(c.change_id)) end
     end,
+    Split = function()
+      local c = under_cursor()
+      require("jujutsu.popups.split").create({
+        root = root,
+        commit = c and c.change_id or nil,
+        change = c,
+      })
+    end,
     NewOn = function()
       local c = under_cursor()
       if c then run(cli.new.args(c.change_id)) end
