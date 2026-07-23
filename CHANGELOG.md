@@ -2,6 +2,7 @@
 
 ### Features
 
+* **docs:** add changelog generation script ([e8484b5](https://github.com/mistweaverco/jujutsu.nvim/commit/e8484b51a1e0b549e2b512bc80bf4c6445cdf302))
 * **status:** add collapsible "recent commits" ([458b1ed](https://github.com/mistweaverco/jujutsu.nvim/commit/458b1ed9af6f7d74d9e2e06fd04c5bbc42675879))
 * **status:** make bookmarks collapsible ([fbc45ff](https://github.com/mistweaverco/jujutsu.nvim/commit/fbc45ffb7a0264a74e1fd855b06bff882e496e33))
 
