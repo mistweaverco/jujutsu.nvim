@@ -12,7 +12,7 @@
   "publisher": "mistweaverco",
   "scripts": {
     "changelog": "./scripts/generate-changelog.sh",
-    "lint": "stylua lua/ & luacheck lua/",
+    "lint": "stylua lua/ & luacheck --quiet lua/",
     "up": "pnpx npm-check-updates -iu"
   },
   "devDependencies": {

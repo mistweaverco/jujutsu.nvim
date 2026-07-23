@@ -9,17 +9,51 @@ local function gh_available() return vim.fn.executable("gh") == 1 end
 
 ---Parse origin URL to owner/repo
 ---@param root string
----@return string|nil, string|nil
+---@return string|nil, string|nil, string|nil
 local function remote_repo(root)
   local res = cli.git_remote_list.call({ cwd = root, hidden = true })
   for _, line in ipairs(res.stdout) do
     local name, url = line:match("^(%S+)%s+(%S+)")
     if name == "origin" and url then
-      -- Match `ssh`/`https` remotes, including `git@github.com:/owner/repo.git`
-      -- and dotted repo names like `jujutsu.nvim`.
-      -- We need to preserve the repo name as-is, but strip the `.git` suffix if present.
-      local owner, repo = url:match("github%.com[:/]+([^/]+)/([^/]+)")
-      if owner and repo then return owner, repo:gsub("%.git$", "") end
+      local provider = nil
+      local owner, repo = nil, nil
+      -- check for GitHub
+      if url:match("^https?://github%.com/") then
+        owner, repo = url:match("github%.com[:/]+([^/]+)/([^/]+)")
+        provider = "github.com"
+      elseif url:match("^git@github%.com:") then
+        owner, repo = url:match("git@github%.com:([^/]+)/([^/]+)")
+        provider = "github.com"
+      -- check for GitLab
+      elseif url:match("^https?://gitlab%.com/") then
+        owner, repo = url:match("git://github%.com/([^/]+)/([^/]+)")
+        provider = "gitlab.com"
+      elseif url:match("^git@gitlab%.com:") then
+        owner, repo = url:match("git@gitlab%.com:([^/]+)/([^/]+)")
+        provider = "gitlab.com"
+      -- check for Bitbucket
+      elseif url:match("^https?://bitbucket%.org/") then
+        owner, repo = url:match("bitbucket%.org/([^/]+)/([^/]+)")
+        provider = "bitbucket.org"
+      elseif url:match("^git@bitbucket%.org:") then
+        owner, repo = url:match("git@bitbucket%.org:([^/]+)/([^/]+)")
+        provider = "bitbucket.org"
+      -- check for Codeberg
+      elseif url:match("^https?://codeberg%.org/") then
+        owner, repo = url:match("codeberg%.org/([^/]+)/([^/]+)")
+        provider = "codeberg.org"
+      elseif url:match("^git@codeberg%.org:") then
+        owner, repo = url:match("git@codeberg%.org:([^/]+)/([^/]+)")
+        provider = "codeberg.org"
+      -- check for Forgejo
+      elseif url:match("^https?://[^/]+%.forgejo%.org/") then
+        owner, repo = url:match("forgejo%.org/([^/]+)/([^/]+)")
+        provider = "forgejo.org"
+      elseif url:match("^git@[^/]+%.forgejo%.org:") then
+        owner, repo = url:match("git@[^/]+%.forgejo%.org:([^/]+)/([^/]+)")
+        provider = "forgejo.org"
+      end
+      if owner and repo and provider then return owner, repo:gsub("%.git$", ""), provider end
     end
   end
   return nil, nil
@@ -45,7 +79,7 @@ function M.list_prs(root)
   return map
 end
 
----Open browser for item under cursor / env
+---Open browser for item under cursor / `env`
 ---@param env table
 function M.open_under_cursor(env)
   local root = env.root or require("jujutsu.jj.repository").root() or vim.fn.getcwd()
@@ -66,18 +100,42 @@ function M.open_under_cursor(env)
   end
 
   if item and item.data and item.data.change then
-    local owner, repo = remote_repo(root)
+    local owner, repo, provider = remote_repo(root)
     local commit = item.data.change.commit_id
-    if owner and repo and commit then
-      vim.ui.open(string.format("https://github.com/%s/%s/commit/%s", owner, repo, commit))
+    if owner and repo and provider and commit then
+      if provider == "github.com" then
+        vim.ui.open(string.format("https://" .. provider .. "/%s/%s/commit/%s", owner, repo, commit))
+      elseif provider == "gitlab.com" then
+        vim.ui.open(string.format("https://" .. provider .. "/%s/%s/-/commit/%s", owner, repo, commit))
+      elseif provider == "bitbucket.org" then
+        vim.ui.open(string.format("https://" .. provider .. "/%s/%s/commits/%s", owner, repo, commit))
+      elseif provider == "codeberg.org" then
+        vim.ui.open(string.format("https://" .. provider .. "/%s/%s/commit/%s", owner, repo, commit))
+      elseif provider == "forgejo.org" then
+        vim.ui.open(string.format("https://" .. provider .. "/%s/%s/commit/%s", owner, repo, commit))
+      else
+        notify.warn("Unsupported provider: " .. provider)
+      end
       return
     end
   end
 
   -- Fallback: open repo
-  local owner, repo = remote_repo(root)
-  if owner and repo then
-    vim.ui.open(string.format("https://github.com/%s/%s", owner, repo))
+  local owner, repo, provider = remote_repo(root)
+  if owner and repo and provider then
+    if provider == "github.com" then
+      vim.ui.open(string.format("https://github.com/%s/%s", owner, repo))
+    elseif provider == "gitlab.com" then
+      vim.ui.open(string.format("https://gitlab.com/%s/%s", owner, repo))
+    elseif provider == "bitbucket.org" then
+      vim.ui.open(string.format("https://bitbucket.org/%s/%s", owner, repo))
+    elseif provider == "codeberg.org" then
+      vim.ui.open(string.format("https://codeberg.org/%s/%s", owner, repo))
+    elseif provider == "forgejo.org" then
+      vim.ui.open(string.format("https://forgejo.org/%s/%s", owner, repo))
+    else
+      notify.warn("Unsupported provider: " .. provider)
+    end
   else
     notify.warn("Could not determine remote URL to open")
   end
