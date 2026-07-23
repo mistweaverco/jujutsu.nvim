@@ -155,7 +155,7 @@ recent commits, and bookmarks.
 | `x` | Discard file / abandon change / delete bookmark |
 | `q` | Close |
 | `<C-r>` | Refresh |
-| `<Tab>` | Toggle section / file diff / recent commit status |
+| `<Tab>` | Toggle section / file diff / recent commit / bookmark history |
 | `<CR>` | Open file / commit |
 
 In the log view, `S` opens the `--stat` view and `P` opens the split popup for the

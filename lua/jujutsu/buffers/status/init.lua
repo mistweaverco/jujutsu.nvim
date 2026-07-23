@@ -21,7 +21,7 @@ local watcher = require("jujutsu.watcher")
 local M = {}
 
 --luacheck: ignore
----@type { buf: table, root: string, data: StatusData|nil, items: StatusItem[], line_map: table<integer, StatusItem>, folds: table<string, boolean>, open_diffs: table<string, boolean>, open_changes: table<string, boolean>, refreshing: boolean }|nil
+---@type { buf: table, root: string, data: StatusData|nil, items: StatusItem[], line_map: table<integer, StatusItem>, folds: table<string, boolean>, open_diffs: table<string, boolean>, open_changes: table<string, boolean>, open_bookmarks: table<string, boolean>, refreshing: boolean }|nil
 local instance
 
 local function status_hl(st)
@@ -89,9 +89,36 @@ local function load_change_files(change)
   end
 end
 
+---@param change ChangeInfo
+local function sync_change_files(change)
+  local id = change.change_id
+  local files = change.files
+  for _, c in ipairs(instance.data.recent or {}) do
+    if c.change_id == id then c.files = files end
+  end
+  for _, bm in ipairs(instance.data.bookmarks or {}) do
+    for _, c in ipairs(bm.commits or {}) do
+      if c.change_id == id then c.files = files end
+    end
+  end
+end
+
+---@param bm { name: string, remote?: string }
+---@return string
+local function bookmark_key(bm) return status_data.bookmark_ref(bm) end
+
+---@param bm table
+local function load_bookmark_commits(bm)
+  bm.commits = status_data.bookmark_commits(instance.root, bm)
+  for _, change in ipairs(bm.commits) do
+    if instance.open_changes[change.change_id] then load_change_files(change) end
+  end
+end
+
 local function clear_item_diffs()
   instance.open_diffs = {}
   instance.open_changes = {}
+  instance.open_bookmarks = {}
 end
 
 ---@param add fun(item: StatusItem)
@@ -132,12 +159,16 @@ end
 
 ---@param add fun(item: StatusItem)
 ---@param change ChangeInfo
-local function add_recent_change(add, change)
+---@param opts? { indent?: string, file_indent?: string }
+local function add_change_row(add, change, opts)
+  opts = opts or {}
+  local indent = opts.indent or "  "
+  local file_indent = opts.file_indent or (indent .. "    ")
   local open = instance.open_changes[change.change_id]
   local isign = (config.values.signs.item or { ">", "v" })[open and 2 or 1]
   local highlights = {}
-  local parts = { "  ", isign, " " }
-  local col = 2
+  local parts = { indent, isign, " " }
+  local col = #indent
 
   table.insert(highlights, { col = col, end_col = col + #isign, hl = "JujutsuFold" })
   col = col + #isign + 1
@@ -182,14 +213,66 @@ local function add_recent_change(add, change)
   if open then
     local files = change.files or {}
     if #files == 0 then
-      add({ type = "hint", text = "      (empty)", hl = "JujutsuSubtle" })
+      add({ type = "hint", text = file_indent .. "(empty)", hl = "JujutsuSubtle" })
     else
       for _, file in ipairs(files) do
         add_file_with_diff(add, file, {
-          indent = "      ",
+          indent = file_indent,
           item_type = "change_file",
           change = change,
           open_key = change_diff_key(change.change_id, file.path),
+        })
+      end
+    end
+  end
+end
+
+---@param add fun(item: StatusItem)
+---@param bm table
+local function add_bookmark_row(add, bm)
+  local key = bookmark_key(bm)
+  local can_expand = not bm.deleted and ((bm.change_id and bm.change_id ~= "") or key ~= "")
+  local open = can_expand and instance.open_bookmarks[key]
+  local isign = can_expand and (config.values.signs.item or { ">", "v" })[open and 2 or 1] or " "
+  local name = key
+  local pr = bm.pr and string.format(" #%d", bm.pr) or ""
+  local detail = string.format("%s %s %s", bm.change_id or "", bm.commit_id or "", bm.description or "")
+  local text = string.format("  %s %s%s %s", isign, name, pr, detail)
+  local name_hl = bm.remote ~= "" and "JujutsuRemoteBranch" or "JujutsuBranch"
+  local col_sign = 2
+  local col_name = col_sign + #isign + 1
+  local highlights = {
+    { col = col_sign, end_col = col_sign + #isign, hl = "JujutsuFold" },
+    { col = col_name, end_col = col_name + #name, hl = name_hl },
+  }
+  if pr ~= "" then
+    table.insert(highlights, {
+      col = col_name + #name,
+      end_col = col_name + #name + #pr,
+      hl = "JujutsuForgePR",
+    })
+  end
+  table.insert(highlights, {
+    col = col_name + #name + #pr + 1,
+    end_col = #text,
+    hl = "JujutsuObjectId",
+  })
+  add({
+    type = "bookmark",
+    text = text,
+    highlights = highlights,
+    data = { bookmark = bm, bookmark_key = key, can_expand = can_expand },
+  })
+
+  if open then
+    local commits = bm.commits or {}
+    if #commits == 0 then
+      add({ type = "hint", text = "      (no commits)", hl = "JujutsuSubtle" })
+    else
+      for _, change in ipairs(commits) do
+        add_change_row(add, change, {
+          indent = "      ",
+          file_indent = "          ",
         })
       end
     end
@@ -265,6 +348,7 @@ local function ensure_folds()
     }
   instance.open_diffs = instance.open_diffs or {}
   instance.open_changes = instance.open_changes or {}
+  instance.open_bookmarks = instance.open_bookmarks or {}
 end
 
 ---@return StatusItem[], table<integer, StatusItem>
@@ -361,7 +445,7 @@ local function build_items()
   -- Recent
   section("recent", "Recent commits", #data.recent, function()
     for _, change in ipairs(data.recent) do
-      add_recent_change(add, change)
+      add_change_row(add, change)
     end
   end)
 
@@ -383,33 +467,7 @@ local function build_items()
   end)
   section("bookmarks", "Bookmarks", #visible_bms, function()
     for _, bm in ipairs(visible_bms) do
-      local name = bm.name
-      if bm.remote ~= "" then name = name .. "@" .. bm.remote end
-      local pr = bm.pr and string.format(" #%d", bm.pr) or ""
-      local detail = string.format("%s %s %s", bm.change_id or "", bm.commit_id or "", bm.description or "")
-      local text = string.format("  %s%s %s", name, pr, detail)
-      local name_hl = bm.remote ~= "" and "JujutsuRemoteBranch" or "JujutsuBranch"
-      local highlights = {
-        { col = 2, end_col = 2 + #name, hl = name_hl },
-      }
-      if pr ~= "" then
-        table.insert(highlights, {
-          col = 2 + #name,
-          end_col = 2 + #name + #pr,
-          hl = "JujutsuForgePR",
-        })
-      end
-      table.insert(highlights, {
-        col = 2 + #name + #pr + 1,
-        end_col = #text,
-        hl = "JujutsuObjectId",
-      })
-      add({
-        type = "bookmark",
-        text = text,
-        highlights = highlights,
-        data = { bookmark = bm },
-      })
+      add_bookmark_row(add, bm)
     end
   end)
 
@@ -484,6 +542,11 @@ function M.refresh()
     -- Re-fetch open recent-commit file lists / nested diffs
     for _, change in ipairs(data.recent) do
       if instance.open_changes[change.change_id] then load_change_files(change) end
+    end
+    -- Re-fetch open bookmark commit lists
+    for _, bm in ipairs(data.bookmarks) do
+      local key = bookmark_key(bm)
+      if instance.open_bookmarks[key] then load_bookmark_commits(bm) end
     end
     vim.schedule(redraw)
   end)
@@ -640,11 +703,24 @@ local function bind_actions(bufnr)
           instance.open_changes[id] = nil
           clear_change_diffs(id)
           change.files = nil
+          sync_change_files(change)
         else
           instance.open_changes[id] = true
           load_change_files(change)
-          for _, c in ipairs(instance.data.recent) do
-            if c.change_id == id then c.files = change.files end
+          sync_change_files(change)
+        end
+        redraw()
+      elseif item.type == "bookmark" and item.data and item.data.bookmark and item.data.can_expand then
+        local bm = item.data.bookmark
+        local key = item.data.bookmark_key or bookmark_key(bm)
+        if instance.open_bookmarks[key] then
+          instance.open_bookmarks[key] = nil
+          bm.commits = nil
+        else
+          instance.open_bookmarks[key] = true
+          load_bookmark_commits(bm)
+          for _, b in ipairs(instance.data.bookmarks) do
+            if bookmark_key(b) == key then b.commits = bm.commits end
           end
         end
         redraw()
@@ -660,6 +736,7 @@ local function bind_actions(bufnr)
           for _, f in ipairs(change.files or {}) do
             if f.path == path then f.diff = item.data.file.diff end
           end
+          sync_change_files(change)
         end
         redraw()
       end
@@ -670,11 +747,20 @@ local function bind_actions(bufnr)
       if item.type == "section" and item.data then
         instance.folds[item.data.section] = false
         redraw()
+      elseif item.type == "bookmark" and item.data and item.data.bookmark and item.data.can_expand then
+        local bm = item.data.bookmark
+        local key = item.data.bookmark_key or bookmark_key(bm)
+        if not instance.open_bookmarks[key] then
+          instance.open_bookmarks[key] = true
+          load_bookmark_commits(bm)
+          redraw()
+        end
       elseif item.type == "change" and item.data and item.data.change then
         local change = item.data.change
         if not instance.open_changes[change.change_id] then
           instance.open_changes[change.change_id] = true
           load_change_files(change)
+          sync_change_files(change)
           redraw()
         end
       elseif (item.type == "file" or item.type == "change_file") and item.data and item.data.file then
@@ -683,6 +769,7 @@ local function bind_actions(bufnr)
           instance.open_diffs[key] = true
           local rev = item.data.change and item.data.change.change_id or nil
           item.data.file.diff = status_data.file_diff(instance.root, item.data.file.path, rev)
+          if item.data.change then sync_change_files(item.data.change) end
           redraw()
         end
       end
@@ -693,12 +780,20 @@ local function bind_actions(bufnr)
       if item.type == "section" and item.data then
         instance.folds[item.data.section] = true
         redraw()
+      elseif item.type == "bookmark" and item.data and item.data.bookmark then
+        local key = item.data.bookmark_key or bookmark_key(item.data.bookmark)
+        if instance.open_bookmarks[key] then
+          instance.open_bookmarks[key] = nil
+          item.data.bookmark.commits = nil
+          redraw()
+        end
       elseif item.type == "change" and item.data and item.data.change then
         local id = item.data.change.change_id
         if instance.open_changes[id] then
           instance.open_changes[id] = nil
           clear_change_diffs(id)
           item.data.change.files = nil
+          sync_change_files(item.data.change)
           redraw()
         end
       elseif (item.type == "file" or item.type == "change_file") and item.data and item.data.file then
@@ -740,6 +835,13 @@ local function bind_actions(bufnr)
       for _, change in ipairs(instance.data.recent) do
         instance.open_changes[change.change_id] = true
         load_change_files(change)
+      end
+      for _, bm in ipairs(instance.data.bookmarks) do
+        if not bm.deleted and bm.remote ~= "git" then
+          local key = bookmark_key(bm)
+          instance.open_bookmarks[key] = true
+          load_bookmark_commits(bm)
+        end
       end
       redraw()
     end,
@@ -989,6 +1091,7 @@ function M.open(root, cwd, opts)
     folds = nil,
     open_diffs = {},
     open_changes = {},
+    open_bookmarks = {},
     refreshing = false,
   }
 
