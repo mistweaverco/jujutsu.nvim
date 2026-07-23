@@ -118,14 +118,13 @@ function M.fetch(root)
   local parent_res = cli.log.revisions("@-").no_graph.template(WC_TEMPLATE).limit(1).call(opts)
 
   local recent_count = config.values.status.recent_commit_count or 10
-  local recent_res = cli.log.revisions("ancestors(@-)").no_graph.template(LOG_TEMPLATE).limit(recent_count).call(opts)
+  local recent = M.log_changes(root, "ancestors(@-)", recent_count)
 
   local diff_res = cli.diff.summary.call(opts)
   local bookmarks = require("jujutsu.jj.bookmark").list(root)
 
   local working_copy = parse_records(table.concat(wc_res.stdout, "\n"))[1]
   local parent = parse_records(table.concat(parent_res.stdout, "\n"))[1]
-  local recent = parse_records(table.concat(recent_res.stdout, "\n"))
 
   local files, conflicts_from_diff = parse_diff_summary(diff_res.stdout)
 
@@ -150,6 +149,41 @@ function M.fetch(root)
     bookmarks = bookmarks,
     root = root,
   }
+end
+
+---@param root string
+---@param revset string
+---@param limit? integer
+---@return ChangeInfo[]
+function M.log_changes(root, revset, limit)
+  limit = limit or config.values.status.recent_commit_count or 10
+  local res = cli.log.revisions(revset).no_graph.template(LOG_TEMPLATE).limit(limit).call({
+    cwd = root,
+    hidden = true,
+    trim = false,
+    remove_ansi = true,
+  })
+  if res.code ~= 0 then return {} end
+  return parse_records(table.concat(res.stdout, "\n"))
+end
+
+---@param bm { name: string, remote?: string }
+---@return string
+function M.bookmark_ref(bm)
+  if bm.remote and bm.remote ~= "" then return bm.name .. "@" .. bm.remote end
+  return bm.name
+end
+
+---@param root string
+---@param bm { name: string, remote?: string, change_id?: string, deleted?: boolean }
+---@param limit? integer
+---@return ChangeInfo[]
+function M.bookmark_commits(root, bm, limit)
+  if bm.deleted then return {} end
+  local ref = M.bookmark_ref(bm)
+  if ref == "" and bm.change_id and bm.change_id ~= "" then ref = bm.change_id end
+  if not ref or ref == "" then return {} end
+  return M.log_changes(root, string.format("ancestors(%s)", ref), limit)
 end
 
 ---@param root string
