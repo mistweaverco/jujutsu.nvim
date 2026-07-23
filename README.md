@@ -180,7 +180,7 @@ require("jujutsu").setup({
 
 ## `Lualine` Integration
 
-> [!INFO]
+> [!NOTE]
 > oh-my-posh-style, with an ahead counter when
 > you are not on the bookmark.
 
