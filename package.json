@@ -1,0 +1,23 @@
+{
+  "name": "jujutsu.nvim",
+  "homepage": "https://github.com/mistweaverco/jujutsu.nvim",
+  "bugs": {
+    "url": "https://github.com/mistweaverco/jujutsu.nvim/issues"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mistweaverco/jujutsu.nvim"
+  },
+  "publisher": "mistweaverco",
+  "scripts": {
+    "changelog": "./scripts/generate-changelog.sh",
+    "lint": "stylua lua/ & luacheck lua/",
+    "up": "pnpx npm-check-updates -iu"
+  },
+  "devDependencies": {
+    "conventional-changelog": "8.1.0",
+    "conventional-changelog-conventionalcommits": "10.2.1"
+  },
+  "packageManager": "pnpm@11.16.0"
+}
