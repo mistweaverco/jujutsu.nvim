@@ -8,7 +8,8 @@ local status_data = require("jujutsu.jj.status")
 local watcher = require("jujutsu.watcher")
 
 ---@class StatusItem
----@field type string  -- "section" | "file" | "change" | "bookmark" | "conflict" | "header" | "diff" | "hint"
+--luacheck: ignore
+---@field type string  -- "section" | "file" | "change_file" | "change" | "bookmark" | "conflict" | "header" | "diff" | "hint"
 ---@field text string
 ---@field hl? string
 ---@field line_hl? string  -- full-line highlight group (diff backgrounds)
@@ -20,7 +21,7 @@ local watcher = require("jujutsu.watcher")
 local M = {}
 
 --luacheck: ignore
----@type { buf: table, root: string, data: StatusData|nil, items: StatusItem[], line_map: table<integer, StatusItem>, folds: table<string, boolean>, open_diffs: table<string, boolean>, refreshing: boolean }|nil
+---@type { buf: table, root: string, data: StatusData|nil, items: StatusItem[], line_map: table<integer, StatusItem>, folds: table<string, boolean>, open_diffs: table<string, boolean>, open_changes: table<string, boolean>, refreshing: boolean }|nil
 local instance
 
 local function status_hl(st)
@@ -48,6 +49,151 @@ local function mode_text(st)
       N = "new file",
     }
   return t[st] or st
+end
+
+---@param dline string
+---@return string
+local function diff_line_hl(dline)
+  local first = dline:sub(1, 1)
+  if dline:match("^@@") then
+    return "JujutsuHunkHeader"
+  elseif dline:match("^diff ") or dline:match("^index ") or dline:match("^%-%-%-") or dline:match("^%+%+%+") then
+    return "JujutsuDiffHeader"
+  elseif first == "+" then
+    return "JujutsuDiffAdd"
+  elseif first == "-" then
+    return "JujutsuDiffDelete"
+  end
+  return "JujutsuDiffContext"
+end
+
+---@param change_id string
+---@param path string
+---@return string
+local function change_diff_key(change_id, path) return "#" .. change_id .. "/" .. path end
+
+---@param change_id string
+local function clear_change_diffs(change_id)
+  local prefix = "#" .. change_id .. "/"
+  for key in pairs(instance.open_diffs) do
+    if key:sub(1, #prefix) == prefix then instance.open_diffs[key] = nil end
+  end
+end
+
+---@param change ChangeInfo
+local function load_change_files(change)
+  change.files = status_data.change_files(instance.root, change.change_id)
+  for _, file in ipairs(change.files) do
+    local key = change_diff_key(change.change_id, file.path)
+    if instance.open_diffs[key] then file.diff = status_data.file_diff(instance.root, file.path, change.change_id) end
+  end
+end
+
+local function clear_item_diffs()
+  instance.open_diffs = {}
+  instance.open_changes = {}
+end
+
+---@param add fun(item: StatusItem)
+---@param file FileStatus
+---@param opts { indent?: string, item_type?: string, change?: ChangeInfo, open_key?: string }
+local function add_file_with_diff(add, file, opts)
+  opts = opts or {}
+  local indent = opts.indent or "  "
+  local item_type = opts.item_type or "file"
+  local open_key = opts.open_key or file.path
+  local open = instance.open_diffs[open_key]
+  local isign = (config.values.signs.item or { ">", "v" })[open and 2 or 1]
+  local mode = mode_text(file.status)
+  local text = string.format("%s%s %s %s", indent, isign, mode, file.path)
+  local col_sign = #indent
+  local col_mode = col_sign + #isign + 1
+  add({
+    type = item_type,
+    text = text,
+    highlights = {
+      { col = col_sign, end_col = col_sign + #isign, hl = "JujutsuFold" },
+      { col = col_mode, end_col = col_mode + #mode, hl = status_hl(file.status) },
+    },
+    data = { file = file, change = opts.change, diff_key = open_key },
+  })
+  if open and file.diff then
+    local diff_indent = indent .. "  "
+    for di, dline in ipairs(file.diff) do
+      add({
+        type = "diff",
+        text = diff_indent .. dline,
+        line_hl = diff_line_hl(dline),
+        data = { file = file, change = opts.change, diff_index = di, diff_key = open_key },
+      })
+    end
+  end
+end
+
+---@param add fun(item: StatusItem)
+---@param change ChangeInfo
+local function add_recent_change(add, change)
+  local open = instance.open_changes[change.change_id]
+  local isign = (config.values.signs.item or { ">", "v" })[open and 2 or 1]
+  local highlights = {}
+  local parts = { "  ", isign, " " }
+  local col = 2
+
+  table.insert(highlights, { col = col, end_col = col + #isign, hl = "JujutsuFold" })
+  col = col + #isign + 1
+
+  table.insert(parts, change.change_id)
+  table.insert(highlights, { col = col, end_col = col + #change.change_id, hl = "JujutsuChangeIdPrefix" })
+  col = col + #change.change_id
+
+  table.insert(parts, " ")
+  col = col + 1
+  table.insert(parts, change.commit_id)
+  table.insert(highlights, { col = col, end_col = col + #change.commit_id, hl = "JujutsuCommitId" })
+  col = col + #change.commit_id
+
+  if #change.bookmarks > 0 then
+    for _, bm in ipairs(change.bookmarks) do
+      table.insert(parts, " ")
+      col = col + 1
+      table.insert(parts, bm)
+      table.insert(highlights, { col = col, end_col = col + #bm, hl = "JujutsuBranch" })
+      col = col + #bm
+    end
+  end
+
+  table.insert(parts, " ")
+  col = col + 1
+  local desc = change.description ~= "" and change.description or "(no description set)"
+  table.insert(parts, desc)
+  table.insert(highlights, {
+    col = col,
+    end_col = col + #desc,
+    hl = change.description ~= "" and "JujutsuDescription" or "JujutsuSubtle",
+  })
+
+  add({
+    type = "change",
+    text = table.concat(parts),
+    highlights = highlights,
+    data = { change = change },
+  })
+
+  if open then
+    local files = change.files or {}
+    if #files == 0 then
+      add({ type = "hint", text = "      (empty)", hl = "JujutsuSubtle" })
+    else
+      for _, file in ipairs(files) do
+        add_file_with_diff(add, file, {
+          indent = "      ",
+          item_type = "change_file",
+          change = change,
+          open_key = change_diff_key(change.change_id, file.path),
+        })
+      end
+    end
+  end
 end
 
 ---@param change ChangeInfo
@@ -118,6 +264,7 @@ local function ensure_folds()
       head = config.values.status.HEAD_folded,
     }
   instance.open_diffs = instance.open_diffs or {}
+  instance.open_changes = instance.open_changes or {}
 end
 
 ---@return StatusItem[], table<integer, StatusItem>
@@ -132,7 +279,7 @@ local function build_items()
   if not config.values.disable_hint then
     add({
       type = "hint",
-      text = "Hint: ? help  |  c change  |  b bookmark  |  l log  |  p push  |  u undo  |  q quit",
+      text = "Hint: ? help  |  c change  |  b bookmark  |  l log  |  p push  |  u undo  |  <tab> fold  |  q quit",
       hl = "JujutsuHint",
     })
     add({ type = "blank", text = "" })
@@ -207,95 +354,14 @@ local function build_items()
       return
     end
     for _, file in ipairs(data.files) do
-      local open = instance.open_diffs[file.path]
-      local isign = (config.values.signs.item or { ">", "v" })[open and 2 or 1]
-      local mode = mode_text(file.status)
-      local text = string.format("  %s %s %s", isign, mode, file.path)
-      -- neoJJ: only mode is highlighted; filename stays Normal/subtle
-      local col_sign = 2
-      local col_mode = col_sign + #isign + 1
-      add({
-        type = "file",
-        text = text,
-        highlights = {
-          { col = col_sign, end_col = col_sign + #isign, hl = "JujutsuFold" },
-          { col = col_mode, end_col = col_mode + #mode, hl = status_hl(file.status) },
-        },
-        data = { file = file },
-      })
-      if open and file.diff then
-        for di, dline in ipairs(file.diff) do
-          -- Classify git-format diff lines (neoJJ-style line backgrounds)
-          local line_hl = "JujutsuDiffContext"
-          local first = dline:sub(1, 1)
-          if dline:match("^@@") then
-            line_hl = "JujutsuHunkHeader"
-          elseif
-            dline:match("^diff ")
-            or dline:match("^index ")
-            or dline:match("^%-%-%-")
-            or dline:match("^%+%+%+")
-          then
-            line_hl = "JujutsuDiffHeader"
-          elseif first == "+" then
-            line_hl = "JujutsuDiffAdd"
-          elseif first == "-" then
-            line_hl = "JujutsuDiffDelete"
-          end
-          add({
-            type = "diff",
-            text = "    " .. dline,
-            line_hl = line_hl,
-            data = { file = file, diff_index = di },
-          })
-        end
-      end
+      add_file_with_diff(add, file, { indent = "  ", item_type = "file" })
     end
   end)
 
   -- Recent
   section("recent", "Recent commits", #data.recent, function()
     for _, change in ipairs(data.recent) do
-      local highlights = {}
-      local parts = { "  " }
-      local col = 2
-
-      table.insert(parts, change.change_id)
-      table.insert(highlights, { col = col, end_col = col + #change.change_id, hl = "JujutsuChangeIdPrefix" })
-      col = col + #change.change_id
-
-      table.insert(parts, " ")
-      col = col + 1
-      table.insert(parts, change.commit_id)
-      table.insert(highlights, { col = col, end_col = col + #change.commit_id, hl = "JujutsuCommitId" })
-      col = col + #change.commit_id
-
-      if #change.bookmarks > 0 then
-        for _, bm in ipairs(change.bookmarks) do
-          table.insert(parts, " ")
-          col = col + 1
-          table.insert(parts, bm)
-          table.insert(highlights, { col = col, end_col = col + #bm, hl = "JujutsuBranch" })
-          col = col + #bm
-        end
-      end
-
-      table.insert(parts, " ")
-      col = col + 1
-      local desc = change.description ~= "" and change.description or "(no description set)"
-      table.insert(parts, desc)
-      table.insert(highlights, {
-        col = col,
-        end_col = col + #desc,
-        hl = change.description ~= "" and "JujutsuDescription" or "JujutsuSubtle",
-      })
-
-      add({
-        type = "change",
-        text = table.concat(parts),
-        highlights = highlights,
-        data = { change = change },
-      })
+      add_recent_change(add, change)
     end
   end)
 
@@ -407,13 +473,17 @@ function M.refresh()
       return
     end
     instance.data = data
-    -- Re-fetch open diffs
+    -- Re-fetch open WC diffs
     for path, open in pairs(instance.open_diffs or {}) do
-      if open then
+      if open and not path:match("^#") then
         for _, f in ipairs(data.files) do
           if f.path == path then f.diff = status_data.file_diff(instance.root, path) end
         end
       end
+    end
+    -- Re-fetch open recent-commit file lists / nested diffs
+    for _, change in ipairs(data.recent) do
+      if instance.open_changes[change.change_id] then load_change_files(change) end
     end
     vim.schedule(redraw)
   end)
@@ -469,13 +539,14 @@ function M.capture_selection()
   local by_path = {}
   for row = first, last do
     local it = instance.line_map[row]
-    if it and it.data and it.data.file then
+    -- Only working-copy files participate in hunk selection / split.
+    if it and it.type ~= "change_file" and it.data and it.data.file then
       local file = it.data.file
       local path = file.path
       by_path[path] = by_path[path] or { file = file, on_file = false, hunks = {} }
       if it.type == "file" then
         by_path[path].on_file = true
-      elseif it.type == "diff" and file.diff and it.data.diff_index then
+      elseif it.type == "diff" and not it.data.change and file.diff and it.data.diff_index then
         local parsed = require("jujutsu.diff.hunks").parse_hunks(file.diff)
         local idx = require("jujutsu.diff.hunks").hunk_index_at(parsed, it.data.diff_index)
         if idx ~= nil then by_path[path].hunks[idx] = true end
@@ -485,12 +556,13 @@ function M.capture_selection()
 
   -- Prefer the path under the anchor cursor/end of selection.
   local prefer = instance.line_map[last] or instance.line_map[first]
+  if prefer and (prefer.type == "change_file" or (prefer.data and prefer.data.change and prefer.type == "diff")) then
+    prefer = nil
+  end
   local prefer_path = prefer and prefer.data and prefer.data.file and prefer.data.file.path
 
   local path = prefer_path
-  if not path or not by_path[path] then
-    path = next(by_path)
-  end
+  if not path or not by_path[path] then path = next(by_path) end
   if not path then return nil end
 
   local entry = by_path[path]
@@ -556,8 +628,36 @@ local function bind_actions(bufnr)
         else
           instance.open_diffs[path] = true
           item.data.file.diff = status_data.file_diff(instance.root, path)
-          -- also update in data.files
           for _, f in ipairs(instance.data.files) do
+            if f.path == path then f.diff = item.data.file.diff end
+          end
+        end
+        redraw()
+      elseif item.type == "change" and item.data and item.data.change then
+        local change = item.data.change
+        local id = change.change_id
+        if instance.open_changes[id] then
+          instance.open_changes[id] = nil
+          clear_change_diffs(id)
+          change.files = nil
+        else
+          instance.open_changes[id] = true
+          load_change_files(change)
+          for _, c in ipairs(instance.data.recent) do
+            if c.change_id == id then c.files = change.files end
+          end
+        end
+        redraw()
+      elseif item.type == "change_file" and item.data and item.data.file and item.data.change then
+        local change = item.data.change
+        local path = item.data.file.path
+        local key = item.data.diff_key or change_diff_key(change.change_id, path)
+        if instance.open_diffs[key] then
+          instance.open_diffs[key] = nil
+        else
+          instance.open_diffs[key] = true
+          item.data.file.diff = status_data.file_diff(instance.root, path, change.change_id)
+          for _, f in ipairs(change.files or {}) do
             if f.path == path then f.diff = item.data.file.diff end
           end
         end
@@ -566,30 +666,61 @@ local function bind_actions(bufnr)
     end,
     OpenFold = function()
       local item = item_under_cursor()
-      if item and item.type == "section" and item.data then
+      if not item then return end
+      if item.type == "section" and item.data then
         instance.folds[item.data.section] = false
         redraw()
+      elseif item.type == "change" and item.data and item.data.change then
+        local change = item.data.change
+        if not instance.open_changes[change.change_id] then
+          instance.open_changes[change.change_id] = true
+          load_change_files(change)
+          redraw()
+        end
+      elseif (item.type == "file" or item.type == "change_file") and item.data and item.data.file then
+        local key = item.data.diff_key or item.data.file.path
+        if not instance.open_diffs[key] then
+          instance.open_diffs[key] = true
+          local rev = item.data.change and item.data.change.change_id or nil
+          item.data.file.diff = status_data.file_diff(instance.root, item.data.file.path, rev)
+          redraw()
+        end
       end
     end,
     CloseFold = function()
       local item = item_under_cursor()
-      if item and item.type == "section" and item.data then
+      if not item then return end
+      if item.type == "section" and item.data then
         instance.folds[item.data.section] = true
         redraw()
+      elseif item.type == "change" and item.data and item.data.change then
+        local id = item.data.change.change_id
+        if instance.open_changes[id] then
+          instance.open_changes[id] = nil
+          clear_change_diffs(id)
+          item.data.change.files = nil
+          redraw()
+        end
+      elseif (item.type == "file" or item.type == "change_file") and item.data and item.data.file then
+        local key = item.data.diff_key or item.data.file.path
+        if instance.open_diffs[key] then
+          instance.open_diffs[key] = nil
+          redraw()
+        end
       end
     end,
     Depth1 = function()
       for k in pairs(instance.folds) do
         instance.folds[k] = true
       end
-      instance.open_diffs = {}
+      clear_item_diffs()
       redraw()
     end,
     Depth2 = function()
       for k in pairs(instance.folds) do
         instance.folds[k] = false
       end
-      instance.open_diffs = {}
+      clear_item_diffs()
       redraw()
     end,
     Depth3 = function()
@@ -606,6 +737,10 @@ local function bind_actions(bufnr)
         instance.open_diffs[f.path] = true
         f.diff = status_data.file_diff(instance.root, f.path)
       end
+      for _, change in ipairs(instance.data.recent) do
+        instance.open_changes[change.change_id] = true
+        load_change_files(change)
+      end
       redraw()
     end,
     MoveDown = function() vim.cmd("normal! j") end,
@@ -613,6 +748,13 @@ local function bind_actions(bufnr)
     GoToFile = function()
       local item = item_under_cursor()
       if not item then return end
+      if item.type == "change" then
+        local change = get_change_from_item(item)
+        if change and change.change_id and change.change_id ~= "" then
+          require("jujutsu.buffers.commit_view").open(instance.root, change.change_id)
+        end
+        return
+      end
       if item.data and item.data.file then
         local path = instance.root .. "/" .. item.data.file.path
         vim.cmd("edit " .. vim.fn.fnameescape(path))
@@ -622,7 +764,7 @@ local function bind_actions(bufnr)
         vim.cmd("edit " .. vim.fn.fnameescape(instance.root .. "/" .. item.data.path))
         return
       end
-      -- Recent commits / Change / Parent / bookmark target → commit view
+      -- Change / Parent / bookmark target → commit view
       local change = get_change_from_item(item)
       if change and change.change_id and change.change_id ~= "" then
         require("jujutsu.buffers.commit_view").open(instance.root, change.change_id)
@@ -713,9 +855,7 @@ local function bind_actions(bufnr)
         )
       end
     end,
-    Split = function()
-      require("jujutsu.popups.split").create(get_env({ with_selection = true }))
-    end,
+    Split = function() require("jujutsu.popups.split").create(get_env({ with_selection = true })) end,
     NewOn = function()
       local item = item_under_cursor()
       local change = get_change_from_item(item)
@@ -848,6 +988,7 @@ function M.open(root, cwd, opts)
     line_map = {},
     folds = nil,
     open_diffs = {},
+    open_changes = {},
     refreshing = false,
   }
 

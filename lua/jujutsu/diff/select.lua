@@ -29,7 +29,7 @@ local function write_tool_script(files)
     'CONTENT="' .. content_dir .. '"',
     'if [ -z "$RIGHT" ]; then exit 1; fi',
     'cd "$CONTENT"',
-    'find . -type f | while IFS= read -r rel; do',
+    "find . -type f | while IFS= read -r rel; do",
     '  rel="${rel#./}"',
     '  mkdir -p "$RIGHT/$(dirname "$rel")"',
     '  cp "$CONTENT/$rel" "$RIGHT/$rel"',
@@ -91,9 +91,7 @@ function M.selected_content(opts)
     on_error = function() return false end,
   })
   local base_lines = {}
-  if show.code == 0 then
-    base_lines = show.stdout or {}
-  end
+  if show.code == 0 then base_lines = show.stdout or {} end
 
   local all = hunks_mod.parse_hunks(opts.file_diff)
   local selected = {}
