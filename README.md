@@ -4,17 +4,21 @@
 
 # jujutsu.nvim
 
-A Magit-style [Jujutsu (jj)](https://github.com/jj-vcs/jj)
+A `Magit`-style [`Jujutsu (jj)`](https://github.com/jj-vcs/jj)
 interface for Neovim.
 
 ---
 
-Inspired by Neogit,
+Inspired by [`Neogit`](https://github.com/neogitorg/neogit)
 rewritten without required plugin dependencies.
 
 ![jujutsu.nvim promo image](assets/jujutsu.nvim-opengraph-image.png)
 
 </div>
+
+## Recent Changes
+
+See [`CHANGELOG.md`](CHANGELOG.md) for a full list of changes.
 
 ## Requirements
 
@@ -27,16 +31,16 @@ rewritten without required plugin dependencies.
 | Purpose | Pick one |
 |---------|----------|
 | Diff viewer | [`diffview.nvim`](https://github.com/sindrets/diffview.nvim) or [`codediff.nvim`](https://github.com/esmuellert/codediff.nvim) |
-| Picker | Telescope, fzf-lua, mini.pick, or snacks.nvim |
+| Picker | `Telescope`, `fzf-lua`, `mini.pick`, or `snacks.nvim` |
 
 
 If no picker is installed, a built-in fuzzy finder is used.
 
-## Installation (lazy.nvim)
+## Installation (`lazy.nvim`)
 
 ```lua
 {
-  "yourname/jujutsu.nvim", -- or local path
+  "mistweaverco/jujutsu.nvim",
   lazy = true,
   -- optional deps:
   -- dependencies = { "sindrets/diffview.nvim", "ibhagwan/fzf-lua" },
@@ -98,7 +102,7 @@ jj.refresh()
 vim.keymap.set("n", "<leader>jc", jj.action("change", "commit"))
 ```
 
-### Popup names
+### Popup Names
 
 - `help`
 - `change`
@@ -113,14 +117,14 @@ vim.keymap.set("n", "<leader>jc", jj.action("change", "commit"))
 - `undo`
 - `workspace`
 
-## Status buffer
+## Status Buffer
 
 Shows working-copy / parent headers,
 conflicts,
 file changes (inline diffs via `<Tab>`),
 recent commits, and bookmarks.
 
-### Default popups (lowercase)
+### Default Popups (Lowercase)
 
 
 | Key | Popup |
@@ -139,7 +143,7 @@ recent commits, and bookmarks.
 | `w` | Workspace |
 
 
-### Context actions (uppercase / misc)
+### Context Actions (Uppercase / Misc)
 
 
 | Key | Action |
@@ -174,14 +178,18 @@ require("jujutsu").setup({
 })
 ```
 
-## Lualine
+## `Lualine` Integration
+
+> [!INFO]
+> oh-my-posh-style, with an ahead counter when
+> you are not on the bookmark.
 
 Colored `+` / `~` / `-` **line** counts for the working-copy diff (repo-wide),
 plus the working-copy change id (prefixed with ``) and the **closest**
-bookmark(s) on ancestors of `@` (oh-my-posh-style, with an ahead counter when
-you are not on the bookmark).
-Uses lualine's `color` API so the **section background is preserved**.
-Counts refresh on write / cwd change / focus (not every buffer switch).
+bookmark(s) on ancestors of `@`.
+
+Uses the color API of `lualine`, so the **section background is preserved**.
+Counts refresh on write / `cwd` change / focus (not every buffer switch).
 
 **Important:** `components()` returns a *list* of components. Flatten it into the
 section - do not put the list itself as one entry.
@@ -211,9 +219,8 @@ require("lualine").setup({
 
 Helpers: `require("jujutsu.lualine").rev()`, `.bookmark()`, `.diff()`, `.status()`.
 
-
 Override any mapping in `setup({ mappings = ... })`, or set `use_default_keymaps = false` and define all yourself.
 
 ## License
 
-MIT
+See the [LICENSE](LICENSE) file for details.
