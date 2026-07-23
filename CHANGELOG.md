@@ -1,8 +1,9 @@
-## [1.0.0](https://github.com/mistweaverco/jujutsu.nvim/compare/v0.3.0...v1.0.0) (2026-07-23)
+## [1.1.0](https://github.com/mistweaverco/jujutsu.nvim/compare/v1.0.0...v1.1.0) (2026-07-23)
 
 ### Features
 
 * **docs:** add changelog generation script ([e8484b5](https://github.com/mistweaverco/jujutsu.nvim/commit/e8484b51a1e0b549e2b512bc80bf4c6445cdf302))
+* **forge:** add multiple providers support ([cc7df1f](https://github.com/mistweaverco/jujutsu.nvim/commit/cc7df1f28f1383995d296507f1117ee2047cfe46))
 * **status:** add collapsible "recent commits" ([458b1ed](https://github.com/mistweaverco/jujutsu.nvim/commit/458b1ed9af6f7d74d9e2e06fd04c5bbc42675879))
 * **status:** make bookmarks collapsible ([fbc45ff](https://github.com/mistweaverco/jujutsu.nvim/commit/fbc45ffb7a0264a74e1fd855b06bff882e496e33))
 
