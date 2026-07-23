@@ -15,8 +15,11 @@ local function remote_repo(root)
   for _, line in ipairs(res.stdout) do
     local name, url = line:match("^(%S+)%s+(%S+)")
     if name == "origin" and url then
-      local owner, repo = url:match("github%.com[:/]([^/]+)/([^/%.]+)")
-      if owner then return owner, repo:gsub("%.git$", "") end
+      -- Match `ssh`/`https` remotes, including `git@github.com:/owner/repo.git`
+      -- and dotted repo names like `jujutsu.nvim`.
+      -- We need to preserve the repo name as-is, but strip the `.git` suffix if present.
+      local owner, repo = url:match("github%.com[:/]+([^/]+)/([^/]+)")
+      if owner and repo then return owner, repo:gsub("%.git$", "") end
     end
   end
   return nil, nil
