@@ -102,8 +102,6 @@ function M.revert(popup)
   if rev then common.run(popup, cli.revert.revision(rev)) end
 end
 
-function M.split(popup)
-  require("jujutsu.popups.split").create(popup.state.env or {})
-end
+function M.split(popup) require("jujutsu.popups.split").create(popup.state.env or {}) end
 
 return M

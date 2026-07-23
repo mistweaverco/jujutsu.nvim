@@ -100,13 +100,10 @@ function M.apply_hunks(base_lines, hunks)
     end
     for _, line in ipairs(hunk.lines) do
       local prefix = line:sub(1, 1)
-      if prefix == "+" or prefix == " " then
-        result[#result + 1] = line:sub(2)
-      elseif prefix == "\\" then
-        -- "\ No newline at end of file" - ignore for content
-      elseif prefix == "-" then
-        -- removed from base; skip
-      end
+      -- INFO:
+      -- "\ No newline at end of file" - ignore for content
+      -- `-` removed from base; skip
+      if prefix == "+" or prefix == " " then result[#result + 1] = line:sub(2) end
     end
     if hunk.old_count > 0 and hunk.old_start > 0 then src = hunk.old_start + hunk.old_count end
   end

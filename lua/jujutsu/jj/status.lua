@@ -45,6 +45,7 @@ local REAL_REC = "\x1e"
 ---@field conflict boolean
 ---@field empty? boolean
 ---@field ago? string
+---@field files? FileStatus[]
 
 ---@class FileStatus
 ---@field path string
@@ -152,13 +153,26 @@ function M.fetch(root)
 end
 
 ---@param root string
+---@param rev string
+---@return FileStatus[]
+function M.change_files(root, rev)
+  local res = cli.diff.revision(rev).summary.call({ cwd = root, hidden = true, remove_ansi = true })
+  if res.code ~= 0 then return {} end
+  local files = parse_diff_summary(res.stdout)
+  return files
+end
+
+---@param root string
 ---@param path string
+---@param rev? string
 ---@return string[]
-function M.file_diff(root, path)
+function M.file_diff(root, path, rev)
   -- Prefer git-format so lines start with +/-/@@ (needed for coloring)
-  local res = cli.diff.git.paths(path).call({ cwd = root, hidden = true, remove_ansi = true })
+  local builder = rev and cli.diff.revision(rev).git.paths(path) or cli.diff.git.paths(path)
+  local res = builder.call({ cwd = root, hidden = true, remove_ansi = true })
   if res.code ~= 0 or #res.stdout == 0 then
-    res = cli.diff.paths(path).call({ cwd = root, hidden = true, remove_ansi = true })
+    builder = rev and cli.diff.revision(rev).paths(path) or cli.diff.paths(path)
+    res = builder.call({ cwd = root, hidden = true, remove_ansi = true })
   end
   return res.stdout
 end
