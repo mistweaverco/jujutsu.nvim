@@ -27,14 +27,21 @@ See [`CHANGELOG.md`](CHANGELOG.md) for a full list of changes.
 
 **No required Neovim plugins.** Optional:
 
+The build-in diff viewer should work perfectly fine,
+but if you absolutely must, you can install one of the following diff viewers and
+pick it in the setup:
 
-| Purpose | Pick one |
-|---------|----------|
-| Diff viewer | [`diffview.nvim`](https://github.com/sindrets/diffview.nvim) or [`codediff.nvim`](https://github.com/esmuellert/codediff.nvim) |
-| Picker | `Telescope`, `fzf-lua`, `mini.pick`, or `snacks.nvim` |
+-  [`diffview.nvim`](https://github.com/sindrets/diffview.nvim) or
+- [`codediff.nvim`](https://github.com/esmuellert/codediff.nvim)
 
+You can use one of the following fuzzy finders for
+the file history and change history popups.
+If none are installed, the built-in picker will be used.
 
-If no picker is installed, a built-in fuzzy finder is used.
+- `Telescope`
+- `fzf-lua`
+- `mini.pick`
+- `snacks.nvim`
 
 ## Installation (`lazy.nvim`)
 
@@ -88,6 +95,7 @@ jj.setup({
     codediff = nil,
   },
   diff_viewer = nil, -- "diffview" | "codediff" | nil = auto
+  file_history = { limit = 200, panel_height = 16 },
   forge = { pr_integration = true },
 })
 
@@ -133,6 +141,10 @@ recent commits, and bookmarks.
 | `b` | Bookmark |
 | `c` | Change |
 | `d` | Diff |
+| `dd` | Working-copy side-by-side diff |
+| `dc` | Change history (file under cursor → that path; revision → focus that change; else repo-wide) |
+| `dr` | Range side-by-side diff |
+| `dt` | Trunk/main/master..@ side-by-side diff |
 | `f` | Fetch |
 | `l` | Log |
 | `m` | Remote |

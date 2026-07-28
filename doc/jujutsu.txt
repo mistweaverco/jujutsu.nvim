@@ -109,6 +109,13 @@ then the built-in finder.
 Diff popup action "External viewer" uses diffview or codediff when available
 (typically requires a git-colocated jj repository).
 
+Diff popup `dd` / `dr` / `dt` open a side-by-side diffsplit tab (file list +
+parent/from ↔ to) instead of a flat unified patch. `dc` opens change history
+(same diffsplit, with a revision list). With a revision under the cursor it
+pre-selects that change; with a file under the cursor it scopes history to that
+path; otherwise repo-wide. Opening a change (`<CR>`) uses the same side-by-side
+diff for that revision.
+
 Forge: when `forge.pr_integration` is true and `gh` is available, bookmarks
 may show PR numbers; `o` opens the PR or commit in the browser.
 

@@ -93,7 +93,7 @@ end
 
 ---@param summary_lines string[]
 ---@return FileStatus[], string[]
-local function parse_diff_summary(summary_lines)
+function M.parse_diff_summary(summary_lines)
   local files = {}
   local conflicts = {}
   for _, line in ipairs(summary_lines) do
@@ -126,7 +126,7 @@ function M.fetch(root)
   local working_copy = parse_records(table.concat(wc_res.stdout, "\n"))[1]
   local parent = parse_records(table.concat(parent_res.stdout, "\n"))[1]
 
-  local files, conflicts_from_diff = parse_diff_summary(diff_res.stdout)
+  local files, conflicts_from_diff = M.parse_diff_summary(diff_res.stdout)
 
   local resolve_res = cli.resolve.list.call(vim.tbl_extend("force", opts, {
     on_error = function() return false end,
@@ -192,7 +192,7 @@ end
 function M.change_files(root, rev)
   local res = cli.diff.revision(rev).summary.call({ cwd = root, hidden = true, remove_ansi = true })
   if res.code ~= 0 then return {} end
-  local files = parse_diff_summary(res.stdout)
+  local files = M.parse_diff_summary(res.stdout)
   return files
 end
 

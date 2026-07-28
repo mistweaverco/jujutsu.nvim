@@ -58,6 +58,11 @@ local defaults = {
   commit_view = { kind = "vsplit" },
   stat_view = { kind = "vsplit" },
   log_view = { kind = "tab" },
+  file_history = {
+    kind = "tab",
+    limit = 200,
+    panel_height = 16,
+  },
   popup = { kind = "split" },
   signs = {
     hunk = { "", "" },

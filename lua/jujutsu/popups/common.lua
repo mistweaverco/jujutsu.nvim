@@ -17,6 +17,16 @@ function M.commit(popup)
 end
 
 ---@param popup table
+---@return string|nil
+function M.path(popup)
+  local env = popup.state.env or {}
+  if env.path and env.path ~= "" then return env.path end
+  local item = env.item
+  if item and item.data and item.data.file and item.data.file.path then return item.data.file.path end
+  return nil
+end
+
+---@param popup table
 ---@param builder any cli builder that supports call_async
 function M.run(popup, builder)
   local res = builder.call_async({ cwd = M.root(popup), hidden = false })

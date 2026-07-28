@@ -17,13 +17,9 @@ end
 
 function M.change(popup)
   local root = common.root(popup)
-  local rev = common.commit(popup) or finder.pick_revision({ prompt = "Diff change", cwd = root })
-  if not rev then return end
-  DiffBuffer.open({
-    cwd = root,
-    title = rev,
-    builder = cli.diff.revision(rev),
-  })
+  local rev = common.commit(popup)
+  local path = common.path(popup)
+  require("jujutsu.buffers.file_history").open(root, { revision = rev, path = path })
 end
 
 function M.range(popup)
@@ -35,30 +31,38 @@ function M.range(popup)
   DiffBuffer.open({
     cwd = root,
     title = from .. ".." .. to,
+    left = from,
+    right = to,
     builder = cli.diff.from(from).to(to),
   })
 end
 
 function M.trunk(popup)
   local root = common.root(popup)
-  local builders = {
-    { title = "trunk", builder = cli.diff.from("trunk()").to("@") },
-    { title = "main", builder = cli.diff.from("main").to("@") },
-    { title = "master", builder = cli.diff.from("master").to("@") },
+  local candidates = {
+    { title = "trunk", left = "trunk()" },
+    { title = "main", left = "main" },
+    { title = "master", left = "master" },
   }
-  for _, entry in ipairs(builders) do
-    local res = entry.builder.git.call({
+  for _, entry in ipairs(candidates) do
+    local res = cli.diff.from(entry.left).to("@").summary.call({
       cwd = root,
       hidden = true,
       remove_ansi = true,
       on_error = function() return false end,
     })
     if res.code == 0 then
-      DiffBuffer.show(res.stdout, entry.title)
+      DiffBuffer.open({
+        cwd = root,
+        title = entry.title,
+        left = entry.left,
+        right = "@",
+        builder = cli.diff.from(entry.left).to("@"),
+      })
       return
     end
   end
-  DiffBuffer.show({ "(could not diff against trunk/main/master)" }, "trunk")
+  require("jujutsu.notify").warn("could not diff against trunk/main/master")
 end
 
 function M.diffedit(popup)

@@ -664,10 +664,12 @@ local function get_env(opts)
   opts = opts or {}
   local item = item_under_cursor()
   local change = get_change_from_item(item)
+  local path = item and item.data and item.data.file and item.data.file.path or nil
   local env = {
     item = item,
     change = change,
     commit = change and change.change_id or nil,
+    path = path,
     root = instance and instance.root,
   }
   if opts.with_selection then env.selection = M.capture_selection() end
