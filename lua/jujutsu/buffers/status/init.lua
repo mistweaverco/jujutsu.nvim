@@ -9,7 +9,7 @@ local watcher = require("jujutsu.watcher")
 
 ---@class StatusItem
 --luacheck: ignore
----@field type string  -- "section" | "file" | "change_file" | "change" | "bookmark" | "conflict" | "header" | "diff" | "hint"
+---@field type string  -- "section" | "file" | "change_file" | "change" | "bookmark" | "conflict" | "header" | "diff" | "hint" | "load_more"
 ---@field text string
 ---@field hl? string
 ---@field line_hl? string  -- full-line highlight group (diff backgrounds)
@@ -21,8 +21,16 @@ local watcher = require("jujutsu.watcher")
 local M = {}
 
 --luacheck: ignore
----@type { buf: table, root: string, data: StatusData|nil, items: StatusItem[], line_map: table<integer, StatusItem>, folds: table<string, boolean>, open_diffs: table<string, boolean>, open_changes: table<string, boolean>, open_bookmarks: table<string, boolean>, refreshing: boolean }|nil
+---@type { buf: table, root: string, data: StatusData|nil, items: StatusItem[], line_map: table<integer, StatusItem>, folds: table<string, boolean>, open_diffs: table<string, boolean>, open_changes: table<string, boolean>, open_bookmarks: table<string, boolean>, bookmark_limits: table<string, integer>, recent_limit: integer, refreshing: boolean }|nil
 local instance
+
+local function default_commit_limit() return config.values.status.recent_commit_count or 10 end
+
+---@param key string
+---@return integer
+local function bookmark_commit_limit(key)
+  return (instance.bookmark_limits and instance.bookmark_limits[key]) or default_commit_limit()
+end
 
 local function status_hl(st)
   if st == "A" or st == "N" then
@@ -109,7 +117,9 @@ local function bookmark_key(bm) return status_data.bookmark_ref(bm) end
 
 ---@param bm table
 local function load_bookmark_commits(bm)
-  bm.commits = status_data.bookmark_commits(instance.root, bm)
+  local key = bookmark_key(bm)
+  local limit = bookmark_commit_limit(key)
+  bm.commits = status_data.bookmark_commits(instance.root, bm, limit)
   for _, change in ipairs(bm.commits) do
     if instance.open_changes[change.change_id] then load_change_files(change) end
   end
@@ -123,7 +133,7 @@ end
 
 ---@param add fun(item: StatusItem)
 ---@param file FileStatus
----@param opts { indent?: string, item_type?: string, change?: ChangeInfo, open_key?: string }
+---@param opts { indent?: string, item_type?: string, change?: ChangeInfo, open_key?: string, bookmark_key?: string }
 local function add_file_with_diff(add, file, opts)
   opts = opts or {}
   local indent = opts.indent or "  "
@@ -142,7 +152,7 @@ local function add_file_with_diff(add, file, opts)
       { col = col_sign, end_col = col_sign + #isign, hl = "JujutsuFold" },
       { col = col_mode, end_col = col_mode + #mode, hl = status_hl(file.status) },
     },
-    data = { file = file, change = opts.change, diff_key = open_key },
+    data = { file = file, change = opts.change, diff_key = open_key, bookmark_key = opts.bookmark_key },
   })
   if open and file.diff then
     local diff_indent = indent .. "  "
@@ -151,7 +161,13 @@ local function add_file_with_diff(add, file, opts)
         type = "diff",
         text = diff_indent .. dline,
         line_hl = diff_line_hl(dline),
-        data = { file = file, change = opts.change, diff_index = di, diff_key = open_key },
+        data = {
+          file = file,
+          change = opts.change,
+          diff_index = di,
+          diff_key = open_key,
+          bookmark_key = opts.bookmark_key,
+        },
       })
     end
   end
@@ -159,7 +175,7 @@ end
 
 ---@param add fun(item: StatusItem)
 ---@param change ChangeInfo
----@param opts? { indent?: string, file_indent?: string }
+---@param opts? { indent?: string, file_indent?: string, bookmark_key?: string }
 local function add_change_row(add, change, opts)
   opts = opts or {}
   local indent = opts.indent or "  "
@@ -182,6 +198,14 @@ local function add_change_row(add, change, opts)
   table.insert(parts, change.commit_id)
   table.insert(highlights, { col = col, end_col = col + #change.commit_id, hl = "JujutsuCommitId" })
   col = col + #change.commit_id
+
+  if change.timestamp and change.timestamp ~= "" then
+    table.insert(parts, " ")
+    col = col + 1
+    table.insert(parts, change.timestamp)
+    table.insert(highlights, { col = col, end_col = col + #change.timestamp, hl = "JujutsuSubtle" })
+    col = col + #change.timestamp
+  end
 
   if #change.bookmarks > 0 then
     for _, bm in ipairs(change.bookmarks) do
@@ -207,7 +231,7 @@ local function add_change_row(add, change, opts)
     type = "change",
     text = table.concat(parts),
     highlights = highlights,
-    data = { change = change },
+    data = { change = change, bookmark_key = opts.bookmark_key },
   })
 
   if open then
@@ -221,6 +245,7 @@ local function add_change_row(add, change, opts)
           item_type = "change_file",
           change = change,
           open_key = change_diff_key(change.change_id, file.path),
+          bookmark_key = opts.bookmark_key,
         })
       end
     end
@@ -273,6 +298,22 @@ local function add_bookmark_row(add, bm)
         add_change_row(add, change, {
           indent = "      ",
           file_indent = "          ",
+          bookmark_key = key,
+        })
+      end
+      local limit = bookmark_commit_limit(key)
+      if #commits >= limit then
+        local next_limit = limit * 2
+        add({
+          type = "load_more",
+          text = string.format("      + Load more… (%d → %d)", limit, next_limit),
+          hl = "JujutsuHint",
+          data = {
+            section = "bookmark",
+            bookmark = bm,
+            bookmark_key = key,
+            next_limit = next_limit,
+          },
         })
       end
     end
@@ -349,6 +390,7 @@ local function ensure_folds()
   instance.open_diffs = instance.open_diffs or {}
   instance.open_changes = instance.open_changes or {}
   instance.open_bookmarks = instance.open_bookmarks or {}
+  instance.bookmark_limits = instance.bookmark_limits or {}
 end
 
 ---@return StatusItem[], table<integer, StatusItem>
@@ -363,7 +405,7 @@ local function build_items()
   if not config.values.disable_hint then
     add({
       type = "hint",
-      text = "Hint: ? help  |  c change  |  b bookmark  |  l log  |  p push  |  u undo  |  <tab> fold  |  q quit",
+      text = "Hint: ? help  |  c change  |  b bookmark  |  l log  |  p push  |  u undo  |  + more  |  <tab> fold  |  q quit",
       hl = "JujutsuHint",
     })
     add({ type = "blank", text = "" })
@@ -447,6 +489,17 @@ local function build_items()
     for _, change in ipairs(data.recent) do
       add_change_row(add, change)
     end
+    local limit = instance.recent_limit or default_commit_limit()
+    if #data.recent >= limit then
+      local next_limit = limit * 2
+      local label = string.format("    + Load more… (%d → %d)", limit, next_limit)
+      add({
+        type = "load_more",
+        text = label,
+        hl = "JujutsuHint",
+        data = { section = "recent", next_limit = next_limit },
+      })
+    end
   end)
 
   -- Bookmarks
@@ -524,7 +577,9 @@ function M.refresh()
   if not instance or instance.refreshing then return end
   instance.refreshing = true
   async.void(function()
-    local ok, data = pcall(status_data.fetch, instance.root)
+    local ok, data = pcall(status_data.fetch, instance.root, {
+      recent_limit = instance.recent_limit,
+    })
     instance.refreshing = false
     if not ok then
       notify.error("Failed to refresh status: " .. tostring(data))
@@ -552,12 +607,96 @@ function M.refresh()
   end)
 end
 
+---Double the recent-commits limit and reload that section.
+local function load_more_recent()
+  if not instance or not instance.data then return end
+  local current = instance.recent_limit or default_commit_limit()
+  instance.recent_limit = current * 2
+  if instance.refreshing then return end
+  instance.refreshing = true
+  async.void(function()
+    local ok, recent = pcall(status_data.log_changes, instance.root, "ancestors(@-)", instance.recent_limit)
+    instance.refreshing = false
+    if not ok then
+      notify.error("Failed to load more commits: " .. tostring(recent))
+      return
+    end
+    instance.data.recent = recent
+    for _, change in ipairs(recent) do
+      if instance.open_changes[change.change_id] then load_change_files(change) end
+    end
+    vim.schedule(redraw)
+  end)
+end
+
+---Double a bookmark's commit limit and reload its history.
+---@param bm table
+---@param key? string
+local function load_more_bookmark(bm, key)
+  if not instance or not instance.data or not bm then return end
+  key = key or bookmark_key(bm)
+  if key == "" then return end
+  instance.bookmark_limits = instance.bookmark_limits or {}
+  local current = bookmark_commit_limit(key)
+  instance.bookmark_limits[key] = current * 2
+  instance.open_bookmarks[key] = true
+  if instance.refreshing then return end
+  instance.refreshing = true
+  async.void(function()
+    local ok, err = pcall(load_bookmark_commits, bm)
+    instance.refreshing = false
+    if not ok then
+      notify.error("Failed to load more bookmark commits: " .. tostring(err))
+      return
+    end
+    for _, b in ipairs(instance.data.bookmarks or {}) do
+      if bookmark_key(b) == key then b.commits = bm.commits end
+    end
+    vim.schedule(redraw)
+  end)
+end
+
 local function item_under_cursor()
   if not instance then return nil end
   local win = instance.buf.winid
   if not win or not vim.api.nvim_win_is_valid(win) then return nil end
   local row = vim.api.nvim_win_get_cursor(win)[1]
   return instance.line_map[row]
+end
+
+---Resolve which commit list to expand from the cursor item.
+---@param item StatusItem|nil
+---@return "recent"|"bookmark", table|nil bookmark, string|nil bookmark_key
+local function resolve_load_more_target(item)
+  if item and item.data then
+    if item.data.section == "bookmark" or item.data.bookmark_key then
+      local key = item.data.bookmark_key
+      local bm = item.data.bookmark
+      if not bm and key and instance.data then
+        for _, b in ipairs(instance.data.bookmarks or {}) do
+          if bookmark_key(b) == key then
+            bm = b
+            break
+          end
+        end
+      end
+      if bm then return "bookmark", bm, key or bookmark_key(bm) end
+    end
+    if item.type == "bookmark" and item.data.bookmark then
+      local key = item.data.bookmark_key or bookmark_key(item.data.bookmark)
+      if instance.open_bookmarks[key] then return "bookmark", item.data.bookmark, key end
+    end
+  end
+  return "recent", nil, nil
+end
+
+local function load_more()
+  local kind, bm, key = resolve_load_more_target(item_under_cursor())
+  if kind == "bookmark" then
+    load_more_bookmark(bm, key)
+  else
+    load_more_recent()
+  end
 end
 
 local function get_change_from_item(item)
@@ -680,9 +819,15 @@ local function bind_actions(bufnr)
   local actions = {
     Close = function() M.close() end,
     RefreshBuffer = function() M.refresh() end,
+    LoadMore = function() load_more() end,
+    LoadMoreRecent = function() load_more() end, -- alias
     Toggle = function()
       local item = item_under_cursor()
       if not item then return end
+      if item.type == "load_more" then
+        load_more()
+        return
+      end
       if item.type == "section" and item.data and item.data.section then
         instance.folds[item.data.section] = not instance.folds[item.data.section]
         redraw()
@@ -852,6 +997,10 @@ local function bind_actions(bufnr)
     GoToFile = function()
       local item = item_under_cursor()
       if not item then return end
+      if item.type == "load_more" then
+        load_more()
+        return
+      end
       if item.type == "change" then
         local change = get_change_from_item(item)
         if change and change.change_id and change.change_id ~= "" then
@@ -1094,6 +1243,8 @@ function M.open(root, cwd, opts)
     open_diffs = {},
     open_changes = {},
     open_bookmarks = {},
+    bookmark_limits = {},
+    recent_limit = config.values.status.recent_commit_count or 10,
     refreshing = false,
   }
 

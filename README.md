@@ -97,6 +97,8 @@ jj.setup({
   diff_viewer = nil, -- "diffview" | "codediff" | nil = auto
   file_history = { limit = 200, panel_height = 16 },
   forge = { pr_integration = true },
+  commit_date_format = "absolute", -- "absolute" | "relative" | strftime (e.g. "%Y-%m-%d %H:%M")
+  log_date_format = "absolute",
 })
 
 jj.open()                              -- status buffer

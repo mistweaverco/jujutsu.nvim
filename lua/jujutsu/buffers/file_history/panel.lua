@@ -2,6 +2,7 @@ local Buffer = require("jujutsu.ui.buffer")
 local cli = require("jujutsu.jj.cli")
 local config = require("jujutsu.config")
 local status_data = require("jujutsu.jj.status")
+local time = require("jujutsu.jj.time")
 
 local M = {}
 
@@ -25,7 +26,7 @@ end
 ---@field bookmarks string[]
 ---@field description string
 ---@field author string
----@field ago string
+---@field timestamp string
 ---@field conflict boolean
 ---@field empty boolean
 ---@field working_copy boolean
@@ -54,7 +55,7 @@ function M.load_entries(root, limit, path)
     'bookmarks.join(",")',
     "description.first_line()",
     "author.name()",
-    "author.timestamp().ago()",
+    time.timestamp_expr("author", "log"),
     'if(conflict, "true", "false")',
     'if(empty, "true", "false")',
     'if(current_working_copy, "true", "false")',
@@ -81,7 +82,7 @@ function M.load_entries(root, limit, path)
           bookmarks = bookmarks,
           description = (f[4] and f[4] ~= "") and f[4] or "(no description set)",
           author = f[5] or "",
-          ago = f[6] or "",
+          timestamp = f[6] or "",
           conflict = f[7] == "true",
           empty = f[8] == "true",
           working_copy = f[9] == "true",
@@ -239,9 +240,13 @@ function M.render(panel, count)
     end
     push(" ", nil)
     push(entry.description, entry.description ~= "(no description set)" and "JujutsuDescription" or "JujutsuSubtle")
-    if entry.author ~= "" or entry.ago ~= "" then
-      local meta =
-        string.format("  %s%s%s", entry.author, (entry.author ~= "" and entry.ago ~= "") and ", " or "", entry.ago)
+    if entry.author ~= "" or entry.timestamp ~= "" then
+      local meta = string.format(
+        "  %s%s%s",
+        entry.author,
+        (entry.author ~= "" and entry.timestamp ~= "") and ", " or "",
+        entry.timestamp
+      )
       push(meta, "JujutsuSubtle")
     end
     if entry.conflict then push(" conflict", "JujutsuConflict") end

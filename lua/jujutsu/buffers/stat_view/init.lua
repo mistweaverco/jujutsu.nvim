@@ -1,6 +1,7 @@
 local Buffer = require("jujutsu.ui.buffer")
 local cli = require("jujutsu.jj.cli")
 local config = require("jujutsu.config")
+local time = require("jujutsu.jj.time")
 
 local M = {}
 
@@ -18,21 +19,19 @@ local function field_template(fields)
   return table.concat(parts, " ++ ") .. ' ++ "\\x1e"'
 end
 
-local META_TEMPLATE = field_template({
-  "change_id.short(8)",
-  "author.email()",
-  "committer.timestamp()",
-  'local_bookmarks.map(|b| b.name()).join(",")',
-  'local_tags.map(|t| t.name()).join(",")',
-  "commit_id.short(8)",
-  'if(signature, signature.status(), "")',
-  "description.first_line()",
-  "change_id.shortest(4)",
-})
-
----@param ts string
----@return string
-local function format_timestamp(ts) return (ts or ""):match("^(%d%d%d%d%-%d%d%-%d%d %d%d:%d%d:%d%d)") or ts or "" end
+local function meta_template()
+  return field_template({
+    "change_id.short(8)",
+    "author.email()",
+    time.timestamp_expr("committer", "commit"),
+    'local_bookmarks.map(|b| b.name()).join(",")',
+    'local_tags.map(|t| t.name()).join(",")',
+    "commit_id.short(8)",
+    'if(signature, signature.status(), "")',
+    "description.first_line()",
+    "change_id.shortest(4)",
+  })
+end
 
 ---@param status string
 ---@return string, string
@@ -56,7 +55,7 @@ end
 ---@param rev string
 ---@return table
 local function fetch_meta(root, rev)
-  local res = cli.log.revisions(rev).no_graph.template(META_TEMPLATE).limit(1).call({
+  local res = cli.log.revisions(rev).no_graph.template(meta_template()).limit(1).call({
     cwd = root,
     hidden = true,
     trim = false,
@@ -79,7 +78,7 @@ local function fetch_meta(root, rev)
       if f[1] and f[1] ~= "" then
         info.change_id = f[1]
         info.email = f[2] or ""
-        info.timestamp = format_timestamp(f[3] or "")
+        info.timestamp = f[3] or ""
         if f[4] and f[4] ~= "" then info.bookmarks = vim.split(f[4], ",", { plain = true }) end
         if f[5] and f[5] ~= "" then info.tags = vim.split(f[5], ",", { plain = true }) end
         info.commit_id = f[6] or ""

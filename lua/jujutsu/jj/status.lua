@@ -1,5 +1,6 @@
 local cli = require("jujutsu.jj.cli")
 local config = require("jujutsu.config")
+local time = require("jujutsu.jj.time")
 
 local M = {}
 
@@ -25,14 +26,17 @@ local WC_TEMPLATE = field_template({
   'if(empty, "true", "false")',
 })
 
-local LOG_TEMPLATE = field_template({
-  "change_id.short(8)",
-  "commit_id.short(8)",
-  'bookmarks.join(",")',
-  "description.first_line()",
-  'if(conflict, "true", "false")',
-  "author.timestamp().ago()",
-})
+local function log_template()
+  return field_template({
+    "change_id.short(8)",
+    "commit_id.short(8)",
+    'bookmarks.join(",")',
+    "description.first_line()",
+    'if(conflict, "true", "false")',
+    'if(empty, "true", "false")',
+    time.timestamp_expr("author", "log"),
+  })
+end
 
 local REAL_SEP = "\x1f"
 local REAL_REC = "\x1e"
@@ -44,7 +48,7 @@ local REAL_REC = "\x1e"
 ---@field description string
 ---@field conflict boolean
 ---@field empty? boolean
----@field ago? string
+---@field timestamp? string
 ---@field files? FileStatus[]
 
 ---@class FileStatus
@@ -83,7 +87,7 @@ local function parse_records(text)
           description = fields[4] or "",
           conflict = fields[5] == "true",
           empty = fields[6] == "true",
-          ago = fields[6],
+          timestamp = fields[7] or "",
         })
       end
     end
@@ -110,17 +114,19 @@ function M.parse_diff_summary(summary_lines)
 end
 
 ---@param root string
+---@param opts? { recent_limit?: integer }
 ---@return StatusData
-function M.fetch(root)
-  local opts = { cwd = root, hidden = true, trim = false }
+function M.fetch(root, opts)
+  opts = opts or {}
+  local call_opts = { cwd = root, hidden = true, trim = false }
 
-  local wc_res = cli.log.revisions("@").no_graph.template(WC_TEMPLATE).limit(1).call(opts)
-  local parent_res = cli.log.revisions("@-").no_graph.template(WC_TEMPLATE).limit(1).call(opts)
+  local wc_res = cli.log.revisions("@").no_graph.template(WC_TEMPLATE).limit(1).call(call_opts)
+  local parent_res = cli.log.revisions("@-").no_graph.template(WC_TEMPLATE).limit(1).call(call_opts)
 
-  local recent_count = config.values.status.recent_commit_count or 10
+  local recent_count = opts.recent_limit or config.values.status.recent_commit_count or 10
   local recent = M.log_changes(root, "ancestors(@-)", recent_count)
 
-  local diff_res = cli.diff.summary.call(opts)
+  local diff_res = cli.diff.summary.call(call_opts)
   local bookmarks = require("jujutsu.jj.bookmark").list(root)
 
   local working_copy = parse_records(table.concat(wc_res.stdout, "\n"))[1]
@@ -128,7 +134,7 @@ function M.fetch(root)
 
   local files, conflicts_from_diff = M.parse_diff_summary(diff_res.stdout)
 
-  local resolve_res = cli.resolve.list.call(vim.tbl_extend("force", opts, {
+  local resolve_res = cli.resolve.list.call(vim.tbl_extend("force", call_opts, {
     on_error = function() return false end,
   }))
   local conflicts = {}
@@ -157,7 +163,7 @@ end
 ---@return ChangeInfo[]
 function M.log_changes(root, revset, limit)
   limit = limit or config.values.status.recent_commit_count or 10
-  local res = cli.log.revisions(revset).no_graph.template(LOG_TEMPLATE).limit(limit).call({
+  local res = cli.log.revisions(revset).no_graph.template(log_template()).limit(limit).call({
     cwd = root,
     hidden = true,
     trim = false,
