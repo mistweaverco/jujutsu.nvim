@@ -7,7 +7,6 @@ local defaults = {
   disable_signs = false,
   disable_insert_on_commit = "auto",
   filewatcher = { enabled = true },
-  graph_style = "ascii",
   commit_date_format = nil,
   log_date_format = nil,
   process_spinner = true,
@@ -57,7 +56,20 @@ local defaults = {
   },
   commit_view = { kind = "vsplit" },
   stat_view = { kind = "vsplit" },
-  log_view = { kind = "tab" },
+  log_view = {
+    kind = "tab",
+    graph = {
+      enabled = true,
+      style = "curved", -- curved | square | ascii | ascii-large
+      symbols = {
+        working_copy = "@",
+        immutable = "◆",
+        mutable = "○",
+        conflict = "×",
+        elided = "~",
+      },
+    },
+  },
   file_history = {
     kind = "tab",
     limit = 200,

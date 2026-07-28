@@ -134,6 +134,7 @@ function M.setup()
     JujutsuObjectSelected = { link = "Visual" },
     JujutsuForgePR = { fg = p.purple, bold = p.bold },
     JujutsuStatGraph = { fg = p.grey },
+    JujutsuGraph = { fg = p.grey },
     JujutsuStatAdd = { fg = p.bg_green, bold = p.bold },
     JujutsuStatDelete = { fg = p.bg_red, bold = p.bold },
     JujutsuStatSigGood = { fg = p.bg_green, bold = p.bold },

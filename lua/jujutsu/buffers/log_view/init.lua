@@ -1,4 +1,5 @@
 local Buffer = require("jujutsu.ui.buffer")
+local Graph = require("jujutsu.buffers.log_view.graph")
 local async = require("jujutsu.async")
 local cli = require("jujutsu.jj.cli")
 local config = require("jujutsu.config")
@@ -9,13 +10,9 @@ local M = {}
 local SEP, REC = "\x1f", "\x1e"
 
 local function field_template(fields)
-  local parts = {}
-  for i, f in ipairs(fields) do
-    if i > 1 then
-      table.insert(parts, string.format('"\\x1f" ++ %s', f))
-    else
-      table.insert(parts, f)
-    end
+  local parts = { string.format('"\\x01" ++ %s', fields[1]) }
+  for i = 2, #fields do
+    table.insert(parts, string.format('"\\x1f" ++ %s', fields[i]))
   end
   return table.concat(parts, " ++ ") .. ' ++ "\\x1e"'
 end
@@ -30,6 +27,10 @@ local function split_change_id(change_id, shortest)
   if prefix_len < 1 then prefix_len = 1 end
   return short:sub(1, prefix_len), short:sub(prefix_len + 1), prefix_len
 end
+
+---@param graph_cfg table
+---@return string
+local function toml_string(value) return vim.inspect(tostring(value)) end
 
 ---@param root string
 ---@param revset? string
@@ -47,86 +48,143 @@ function M.open(root, revset)
     'if(empty, "true", "false")',
     'if(current_working_copy, "true", "false")',
     "change_id.shortest(4)",
+    'if(immutable, "true", "false")',
   })
 
   local line_map = {}
 
   local function refresh()
-    local res = cli.log.revisions(revset).no_graph.template(tmpl).limit(200).call({ cwd = root, hidden = true })
+    local graph_cfg = (config.values.log_view and config.values.log_view.graph) or {}
+    local graph_enabled = graph_cfg.enabled ~= false
+    local symbols = graph_cfg.symbols or {}
+    local style = graph_cfg.style or "curved"
+
+    local builder = cli.log.revisions(revset).template(tmpl).limit(200)
+    if graph_enabled then
+      builder = builder.config("ui.graph.style", toml_string(style))
+    else
+      builder = builder.no_graph
+    end
+
+    local res = builder.call({ cwd = root, hidden = true })
     local lines = {}
     local highlights = {}
     line_map = {}
+
+    local function emit_revision(graph_prefix, rec)
+      local f = vim.split(rec:gsub("\n", ""), SEP, { plain = true })
+      if not f[1] or f[1] == "" then return end
+
+      local change_id = f[1]
+      local commit_id = f[2] or ""
+      local bookmarks = (f[3] and f[3] ~= "") and vim.split(f[3], ",", { plain = true }) or {}
+      local desc = (f[4] and f[4] ~= "") and f[4] or "(no description set)"
+      local conflict = f[5] == "true"
+      local empty = f[6] == "true"
+      local working_copy = f[7] == "true"
+      local shortest = f[8] or ""
+      local immutable = f[9] == "true"
+
+      local parts = {}
+      local hls = {}
+      local col = 0
+
+      local function push(str, hl)
+        table.insert(parts, str)
+        if hl and #str > 0 then table.insert(hls, { col = col, end_col = col + #str, hl = hl }) end
+        col = col + #str
+      end
+
+      if graph_enabled and graph_prefix and graph_prefix ~= "" then
+        local node = Graph.node_symbol(symbols, {
+          working_copy = working_copy,
+          immutable = immutable,
+          conflict = conflict,
+        })
+        push(Graph.rewrite_node(graph_prefix, node), "JujutsuGraph")
+      end
+
+      local prefix, rest = split_change_id(change_id, shortest)
+      local id_prefix_hl = working_copy and "JujutsuWorkingCopy" or "JujutsuChangeIdPrefix"
+      local id_rest_hl = working_copy and "JujutsuWorkingCopy" or "JujutsuChangeIdRest"
+      push(prefix, id_prefix_hl)
+      if rest ~= "" then push(rest, id_rest_hl) end
+
+      push(" ", nil)
+      push(commit_id:sub(1, 8), "JujutsuCommitId")
+
+      for _, bm in ipairs(bookmarks) do
+        push(" ", nil)
+        push(bm, "JujutsuBranch")
+      end
+
+      push(" ", nil)
+      push(desc, desc ~= "(no description set)" and "JujutsuDescription" or "JujutsuSubtle")
+
+      local status_parts = {}
+      if empty then table.insert(status_parts, "empty") end
+      if conflict then table.insert(status_parts, "conflict") end
+      if #status_parts > 0 then
+        push(" (" .. table.concat(status_parts, ", ") .. ")", conflict and "JujutsuConflict" or "JujutsuSubtle")
+      end
+
+      local row = #lines + 1
+      lines[row] = table.concat(parts)
+      for _, h in ipairs(hls) do
+        table.insert(highlights, {
+          line = row - 1,
+          col = h.col,
+          end_col = h.end_col,
+          hl = h.hl,
+        })
+      end
+      line_map[row] = {
+        change_id = change_id,
+        commit_id = commit_id,
+        bookmarks = bookmarks,
+        description = f[4] or "",
+        conflict = conflict,
+        empty = empty,
+        working_copy = working_copy,
+        immutable = immutable,
+      }
+    end
+
     local text = table.concat(res.stdout, "\n")
-    local i = 0
-    for rec in (text .. REC):gmatch("(.-)" .. REC) do
-      if rec ~= "" then
-        local f = vim.split(rec:gsub("\n", ""), SEP, { plain = true })
-        if f[1] and f[1] ~= "" then
-          i = i + 1
-          local change_id = f[1]
-          local commit_id = f[2] or ""
-          local bookmarks = (f[3] and f[3] ~= "") and vim.split(f[3], ",", { plain = true }) or {}
-          local desc = (f[4] and f[4] ~= "") and f[4] or "(no description set)"
-          local conflict = f[5] == "true"
-          local empty = f[6] == "true"
-          local working_copy = f[7] == "true"
-          local shortest = f[8] or ""
-
-          local parts = {}
-          local hls = {}
-          local col = 0
-
-          local function push(str, hl)
-            table.insert(parts, str)
-            if hl and #str > 0 then table.insert(hls, { col = col, end_col = col + #str, hl = hl }) end
-            col = col + #str
+    -- Physical lines matter for graph connectors; a line may hold multiple
+    -- sentinel/RS records when --no-graph packs output without newlines.
+    for raw_line in (text .. "\n"):gmatch("(.-)\n") do
+      if not raw_line:find(Graph.SENTINEL, 1, true) then
+        if graph_enabled and raw_line:match("%S") then
+          local drawn = Graph.rewrite_elided(raw_line, symbols.elided or "~")
+          local row = #lines + 1
+          lines[row] = drawn
+          if #drawn > 0 then
+            table.insert(highlights, { line = row - 1, col = 0, end_col = #drawn, hl = "JujutsuGraph" })
           end
-
-          local prefix, rest = split_change_id(change_id, shortest)
-          local id_prefix_hl = working_copy and "JujutsuWorkingCopy" or "JujutsuChangeIdPrefix"
-          local id_rest_hl = working_copy and "JujutsuWorkingCopy" or "JujutsuChangeIdRest"
-          push(prefix, id_prefix_hl)
-          if rest ~= "" then push(rest, id_rest_hl) end
-
-          push(" ", nil)
-          push(commit_id:sub(1, 8), "JujutsuCommitId")
-
-          for _, bm in ipairs(bookmarks) do
-            push(" ", nil)
-            push(bm, "JujutsuBranch")
+        end
+      else
+        local pos = 1
+        local first = true
+        while true do
+          local s, e = raw_line:find(Graph.SENTINEL, pos, true)
+          if not s then break end
+          local graph_prefix = first and raw_line:sub(1, s - 1) or ""
+          first = false
+          local rec_end = raw_line:find(REC, e + 1, true)
+          local rec
+          if rec_end then
+            rec = raw_line:sub(e + 1, rec_end - 1)
+            pos = rec_end + 1
+          else
+            rec = raw_line:sub(e + 1)
+            pos = #raw_line + 1
           end
-
-          push(" ", nil)
-          push(desc, desc ~= "(no description set)" and "JujutsuDescription" or "JujutsuSubtle")
-
-          local status_parts = {}
-          if empty then table.insert(status_parts, "empty") end
-          if conflict then table.insert(status_parts, "conflict") end
-          if #status_parts > 0 then
-            push(" (" .. table.concat(status_parts, ", ") .. ")", conflict and "JujutsuConflict" or "JujutsuSubtle")
-          end
-
-          lines[i] = table.concat(parts)
-          for _, h in ipairs(hls) do
-            table.insert(highlights, {
-              line = i - 1,
-              col = h.col,
-              end_col = h.end_col,
-              hl = h.hl,
-            })
-          end
-          line_map[i] = {
-            change_id = change_id,
-            commit_id = commit_id,
-            bookmarks = bookmarks,
-            description = f[4] or "",
-            conflict = conflict,
-            empty = empty,
-            working_copy = working_copy,
-          }
+          emit_revision(graph_prefix, rec)
         end
       end
     end
+
     if #lines == 0 then
       lines = { "(empty log)" }
       highlights = {

@@ -202,6 +202,14 @@ mt_builder.__index = function(tbl, action)
       state.env = vim.tbl_extend("force", state.env, cfg)
       return tbl
     end
+  elseif action == "config" then
+    ---Pass a global `jj --config NAME=VALUE` (before the subcommand).
+    ---@param name string
+    ---@param value string TOML-encoded value, e.g. `"curved"` or `true`
+    return function(name, value)
+      table.insert(state.configs, { name = name, value = value })
+      return tbl
+    end
   elseif action == "call" then
     return function(opts) return M._call(tbl, opts) end
   elseif action == "call_async" then
@@ -234,6 +242,7 @@ local function new_builder(command, config)
       options = {},
       arguments = {},
       files = {},
+      configs = {},
       input = nil,
       env = {},
     },
@@ -249,6 +258,11 @@ function M._build_cmd(tbl, opts)
   local jj_bin = require("jujutsu.jj.shell").resolve_jj()
   local color = opts.color or "never"
   local cmd = { jj_bin, "--no-pager", "--color=" .. color }
+
+  for _, c in ipairs(state.configs or {}) do
+    table.insert(cmd, "--config")
+    table.insert(cmd, c.name .. "=" .. c.value)
+  end
 
   if readonly_commands[command] then table.insert(cmd, "--ignore-working-copy") end
 
