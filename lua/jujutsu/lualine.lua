@@ -284,6 +284,34 @@ function M.status()
   return table.concat(parts, " ")
 end
 
+--- Ordered statusline segments with highlight group names (for colored components).
+---@return { text: string, hl: string, key: string }[]
+function M.segments()
+  local data = get_cache()
+  if not data then return {} end
+
+  ---@type { text: string, hl: string, key: string }[]
+  local out = {}
+  if data.change_id ~= "" then
+    out[#out + 1] = { text = REV_ICON .. " " .. data.change_id, hl = "JujutsuLualineRev", key = "rev" }
+  end
+  if #data.bookmarks > 0 then
+    out[#out + 1] = {
+      text = table.concat(data.bookmarks, " "),
+      hl = "JujutsuLualineBookmark",
+      key = "bookmark",
+    }
+  end
+  if data.added > 0 then out[#out + 1] = { text = "+" .. data.added, hl = "JujutsuLualineAdd", key = "add" } end
+  if data.changed > 0 then
+    out[#out + 1] = { text = "~" .. data.changed, hl = "JujutsuLualineChange", key = "change" }
+  end
+  if data.deleted > 0 then
+    out[#out + 1] = { text = "-" .. data.deleted, hl = "JujutsuLualineDelete", key = "delete" }
+  end
+  return out
+end
+
 ---@return table[]
 function M.components()
   local function piece(fn, cond, hl)

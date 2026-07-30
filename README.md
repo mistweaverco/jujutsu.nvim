@@ -211,6 +211,8 @@ section - do not put the list itself as one entry.
 ```lua
 require("lualine").setup({
   sections = {
+    -- default jujutsu lualine widget
+    lualine_a = { "mode", "jujutsu" },
     -- jj widgets first, then your items:
     lualine_b = require("jujutsu.lualine").prepend({ "branch" }),
 
