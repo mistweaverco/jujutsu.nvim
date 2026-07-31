@@ -59,6 +59,7 @@ function M.create(root, left_win, right_win, opts)
   for _, win in ipairs({ left_win, right_win }) do
     vim.wo[win].foldenable = false
     vim.wo[win].wrap = false
+    vim.wo[win].signcolumn = "auto"
     if config.values.disable_line_numbers then
       vim.wo[win].number = false
       vim.wo[win].relativenumber = false
@@ -80,6 +81,8 @@ end
 ---@param name string
 ---@param ft string
 local function set_content(buf, lines, name, ft)
+  -- readonly and modifiable are independent; clear both before rewriting.
+  vim.bo[buf.bufnr].readonly = false
   vim.bo[buf.bufnr].modifiable = true
   pcall(vim.api.nvim_buf_set_name, buf.bufnr, "")
   pcall(vim.api.nvim_buf_set_name, buf.bufnr, name)

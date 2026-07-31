@@ -7,8 +7,8 @@ local M = {}
 local SEP = "\x1f"
 
 local ANNOTATE_TEMPLATE = table.concat({
-  'commit.change_id().shortest(8)',
-  'commit.author().name()',
+  "commit.change_id().shortest(8)",
+  "commit.author().name()",
   'commit_timestamp(commit).local().format("%Y-%m-%d")',
   "line_number",
   'if(first_line_in_hunk, "1", "0")',
@@ -118,12 +118,8 @@ function M.render(view)
   for i, row in ipairs(view.lines) do
     local author = row.author
     if #author > author_w then author = author:sub(1, author_w - 1) .. "…" end
-    local meta = string.format(
-      "%-" .. id_w .. "s  %-" .. author_w .. "s  %-" .. date_w .. "s",
-      row.change_id,
-      author,
-      row.date
-    )
+    local meta =
+      string.format("%-" .. id_w .. "s  %-" .. author_w .. "s  %-" .. date_w .. "s", row.change_id, author, row.date)
     local text = meta .. " │ " .. row.content
     lines[#lines + 1] = text
 
@@ -154,12 +150,10 @@ function M.render(view)
     elseif view.selected_change and row.change_id == view.selected_change then
       line_hl = "JujutsuAnnotateSelected"
     end
-    if line_hl then
-      highlights[#highlights + 1] = {
-        line = i - 1,
-        line_hl = line_hl,
-      }
-    end
+    if line_hl then highlights[#highlights + 1] = {
+      line = i - 1,
+      line_hl = line_hl,
+    } end
   end
 
   if #lines == 0 then
@@ -180,9 +174,7 @@ function M.goto_line(view, line_number)
       return
     end
   end
-  if line_number >= 1 and line_number <= #view.lines then
-    vim.api.nvim_win_set_cursor(view.win, { line_number, 0 })
-  end
+  if line_number >= 1 and line_number <= #view.lines then vim.api.nvim_win_set_cursor(view.win, { line_number, 0 }) end
 end
 
 ---@param view AnnotateView
@@ -193,9 +185,7 @@ function M.highlight_change(view, change_id)
   if not change_id or change_id == "" then return end
   for i, row in ipairs(view.lines) do
     if row.change_id == change_id or change_id:sub(1, #row.change_id) == row.change_id then
-      if view.win and vim.api.nvim_win_is_valid(view.win) then
-        vim.api.nvim_win_set_cursor(view.win, { i, 0 })
-      end
+      if view.win and vim.api.nvim_win_is_valid(view.win) then vim.api.nvim_win_set_cursor(view.win, { i, 0 }) end
       return
     end
   end

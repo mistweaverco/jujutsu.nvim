@@ -102,6 +102,11 @@ local defaults = {
   diff_viewer = nil,
   forge = {
     pr_integration = true,
+    review = {
+      enabled = true,
+    },
+    bitbucket = { user = nil, token = nil },
+    forgejo = { token = nil },
     hosts = {},
   },
   sections = {

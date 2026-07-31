@@ -129,7 +129,9 @@ function M.open(root, opts)
   if instance then close_view() end
 
   local acfg = cfg()
-  local panel_height = acfg.panel_height or (config.values.file_history and config.values.file_history.panel_height) or 16
+  local panel_height = acfg.panel_height
+    or (config.values.file_history and config.values.file_history.panel_height)
+    or 16
   local limit = (config.values.file_history and config.values.file_history.limit) or 200
 
   local ann_lines, err = view_mod.fetch(root, path, opts.revision)

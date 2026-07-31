@@ -11,6 +11,7 @@ CONTENTS                                                     *jujutsu-contents*
   6. Integrations ................ |jujutsu-integrations|
   7. Signs ....................... |jujutsu-signs|
   8. Annotate .................... |jujutsu-annotate|
+  9. PR review ................... |jujutsu-review|
 
 ==============================================================================
 1. INTRODUCTION                                                 *jujutsu-intro*
@@ -29,6 +30,9 @@ Optional (pick at most one per category):
 
 Diff:  diffview.nvim  or  codediff.nvim
 Pick:  telescope.nvim | fzf-lua | mini.pick | snacks.nvim
+
+Forge review (see |jujutsu-review|):
+  GitHub: `gh`  |  GitLab: `glab`  |  Forgejo/Codeberg & Bitbucket: `curl` + tokens
 
 Without a picker plugin, a built-in fuzzy finder is used.
 
@@ -62,7 +66,13 @@ Without a picker plugin, a built-in fuzzy finder is used.
       codediff = nil,
     },
     diff_viewer = nil,  -- "diffview" | "codediff" | nil
-    forge = { pr_integration = true },
+    forge = {
+      pr_integration = true,
+      review = { enabled = true },
+      bitbucket = { user = nil, token = nil },
+      forgejo = { token = nil },
+      hosts = {},
+    },
   })
 <
 
@@ -71,6 +81,7 @@ Example lazy.nvim keys (no `cmd`):
   keys = {
     { "<leader>gg", function() require("jujutsu").open() end },
     { "<leader>jb", function() require("jujutsu").annotate() end },
+    { "<leader>jr", function() require("jujutsu").review() end },
   }
 <
 
@@ -104,6 +115,14 @@ annotate({opts?})         Open `jj file annotate` for the current buffer
     revision   string   starting revision for annotate
     cwd        string   workspace directory hint
 
+                                                          *jujutsu.review()*
+review({opts?})           Open a forge PR/MR review in DiffView.
+                          Picks an open PR when number is omitted.
+
+  Options: ~
+    number     integer|string   PR/MR number
+    cwd/root   string           workspace directory
+
                                                           *jujutsu.action()*
 action({popup}, {action}, {args?})
                           Return a function that runs a popup action.
@@ -128,7 +147,7 @@ status, and bookmark commit history).
 Log view: `<cr>` open commit, `S` open `--stat` view, `P` split popup.
 
 Diff popup: `dd` / `dr` / `dt` side-by-side diffsplit; `dc` change history;
-`da` annotate (file under cursor).
+`da` annotate (file under cursor); `dR` review open PR/MR.
 
 ==============================================================================
 6. INTEGRATIONS                                           *jujutsu-integrations*
@@ -147,9 +166,10 @@ path; otherwise repo-wide. Opening a change (`<CR>`) uses the same side-by-side
 diff for that revision.
 
 `da` opens annotate for the file under the cursor (see |jujutsu-annotate|).
+`dR` opens PR/MR review (see |jujutsu-review|).
 
-Forge: when `forge.pr_integration` is true and `gh` is available, bookmarks
-may show PR numbers; `o` opens the PR or commit in the browser.
+Forge: when `forge.pr_integration` is true, bookmarks may show PR numbers for
+the detected provider; `o` opens the PR or commit in the browser.
 
 Lualine: >
   require("lualine").setup({
@@ -212,6 +232,36 @@ Config: `annotate.panel_height` (default 16). File history limit comes from
 
 Highlight groups: `JujutsuAnnotateHash`, `JujutsuAnnotateAuthor`,
 `JujutsuAnnotateDate`, `JujutsuAnnotateCurrent`, `JujutsuAnnotateSelected`.
+
+==============================================================================
+9. PR REVIEW                                                   *jujutsu-review*
+
+Review open pull / merge requests in the built-in DiffView with local comments,
+markdown yank, and forge submit.
+
+Providers: ~
+- github     via `gh`
+- gitlab     via `glab`
+- forgejo    Codeberg / Forgejo via REST (`FORGEJO_TOKEN` / `CODEBERG_TOKEN`)
+- bitbucket  Bitbucket Cloud via REST (`BITBUCKET_USER` + `BITBUCKET_TOKEN`)
+
+Entry points: ~
+- Diff popup `dR`
+- |jujutsu.review()|
+
+Review DiffView keys: ~
+  c        comment at cursor line
+  C        file comment
+  v/V + c  range comment
+  ;c       review-level comment
+  e / i    edit unsubmitted comment at cursor
+  m / M    next / previous comment
+  r        toggle file reviewed (panel)
+  y        yank structured markdown
+  S        submit (Comment / Approve / Request changes; Draft = GitHub only)
+  ?        help
+
+Sessions are stored under `stdpath("data")/jujutsu/reviews/`.
 
 ==============================================================================
 vim:tw=78:ts=8:ft=help:norl:

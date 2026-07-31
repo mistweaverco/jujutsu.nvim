@@ -120,10 +120,13 @@ jj.close()
 jj.refresh()
 jj.annotate()                          -- annotate current buffer at cursor line
 jj.annotate({ path = "src/main.lua", line = 10 })
+jj.review()                            -- pick an open PR/MR and review it
+jj.review({ number = 15 })             -- open a specific PR/MR
 
 -- Bindable action for your own keymaps:
 vim.keymap.set("n", "<leader>jc", jj.action("change", "commit"))
 vim.keymap.set("n", "<leader>jb", jj.annotate)
+vim.keymap.set("n", "<leader>jr", jj.review)
 ```
 
 ### Popup Names
@@ -159,6 +162,54 @@ lines in the annotate buffer.
 - Magit: Diff popup `da` (file under cursor)
 - Lua: `require("jujutsu").annotate()` (current buffer + cursor line)
 
+## PR / MR review
+
+Tuicr-inspired code review on top of the built-in DiffView (file panel +
+side-by-side). Existing inline comments from the forge (GitHub/GitLab/…) are
+loaded and shown as cyan overlays; your new local comments are yellow until
+you submit or yank markdown.
+
+**Providers**
+
+| Provider | Transport | Credentials |
+|----------|-----------|-------------|
+| GitHub | `gh` | `gh auth login` |
+| GitLab | `glab` | `glab auth login` |
+| Codeberg / Forgejo | `curl` REST | `FORGEJO_TOKEN` / `CODEBERG_TOKEN` or `forge.forgejo.token` |
+| Bitbucket Cloud | `curl` REST | `BITBUCKET_USER` + `BITBUCKET_TOKEN` or `forge.bitbucket.*` |
+
+**Entry points**
+
+- Diff popup `dR` (Review PR/MR)
+- `require("jujutsu").review()` / `.review({ number = 15 })`
+
+**Review keymaps** (in DiffView review mode)
+
+| Key | Action |
+|-----|--------|
+| `c` | Comment at cursor line |
+| `C` | File comment |
+| visual `c` | Range comment |
+| `;c` | Review-level comment |
+| `e` / `i` | Edit unsubmitted comment at cursor |
+| `m` / `M` | Next / previous comment |
+| `r` | Toggle file reviewed (panel) |
+| `y` | Yank structured markdown |
+| `S` | Submit (Comment / Approve / Request changes; Draft on GitHub only) |
+| `?` | Help |
+
+Sessions persist under `stdpath("data")/jujutsu/reviews/`.
+
+```lua
+forge = {
+  pr_integration = true,
+  review = { enabled = true },
+  bitbucket = { user = vim.env.BITBUCKET_USER, token = vim.env.BITBUCKET_TOKEN },
+  forgejo = { token = vim.env.CODEBERG_TOKEN },
+  hosts = {}, -- e.g. ["git.example.com"] = "gitlab"
+},
+```
+
 ## Status Buffer
 
 Shows working-copy / parent headers,
@@ -179,6 +230,7 @@ recent commits, and bookmarks.
 | `dc` | Change history (file under cursor → that path; revision → focus that change; else repo-wide) |
 | `da` | Annotate file under cursor (`jj file annotate` + file history panel) |
 | `dr` | Range side-by-side diff |
+| `dR` | Review open PR/MR (forge) |
 | `dt` | Trunk/main/master..@ side-by-side diff |
 | `f` | Fetch |
 | `l` | Log |

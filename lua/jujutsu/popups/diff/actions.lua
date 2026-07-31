@@ -100,4 +100,9 @@ function M.external(popup)
   end
 end
 
+function M.review(popup)
+  local root = common.root(popup)
+  require("jujutsu.review").open({ root = root })
+end
+
 return M

@@ -207,6 +207,20 @@ function M.annotate(opts)
   })
 end
 
+---Open a forge PR/MR review (DiffView + local comments + submit via gh/glab/REST).
+---@class ReviewOpts
+---@field cwd? string
+---@field root? string
+---@field number? integer|string
+
+---@param opts? ReviewOpts
+function M.review(opts)
+  ensure_setup()
+  opts = opts or {}
+  if opts.cwd and not opts.root then opts.root = cli.find_workspace_root(opts.cwd) or opts.cwd end
+  require("jujutsu.review").open(opts)
+end
+
 function M.get_config() return config.values end
 
 M.config = config
