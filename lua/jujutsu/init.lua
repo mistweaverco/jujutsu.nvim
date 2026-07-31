@@ -14,12 +14,14 @@ function M.setup(opts)
   end
   if did_setup then
     config.setup(opts)
+    require("jujutsu.signs").setup()
     return
   end
   did_setup = true
   config.setup(opts)
   require("jujutsu.hl").setup()
   require("jujutsu.hl").attach_autocmd()
+  require("jujutsu.signs").setup()
   M.autocmd_group = vim.api.nvim_create_augroup("Jujutsu", { clear = false })
 end
 
@@ -97,6 +99,7 @@ function M.refresh()
   local status = require("jujutsu.buffers.status")
   if status.instance() then status.refresh() end
   pcall(function() require("jujutsu.lualine").refresh() end)
+  pcall(function() require("jujutsu.signs").refresh_all() end)
 end
 
 function M.focus()
@@ -134,6 +137,74 @@ function M.action(popup, action, args)
       vim.schedule(function() M.refresh() end)
     end)
   end
+end
+
+---Annotate the current buffer (or opts.path) with jj file annotate.
+---@class AnnotateOpts
+---@field bufnr? integer
+---@field line? integer
+---@field path? string absolute or repo-relative path
+---@field revision? string
+---@field cwd? string
+
+---@param opts? AnnotateOpts
+function M.annotate(opts)
+  ensure_setup()
+  opts = opts or {}
+  local bufnr = opts.bufnr or vim.api.nvim_get_current_buf()
+  local line = opts.line or vim.api.nvim_win_get_cursor(0)[1]
+
+  local root ---@type string|nil
+  local path ---@type string|nil
+
+  if opts.path and opts.path ~= "" then
+    local given = opts.path
+    local as_abs = vim.fn.fnamemodify(given, ":p")
+    if given:sub(1, 1) == "/" or (vim.uv.fs_stat(as_abs) and given:find("/", 1, true)) then
+      root = cli.find_workspace_root(opts.cwd or vim.fn.fnamemodify(as_abs, ":h"))
+      if not root then
+        notify.error("not a jj workspace")
+        return
+      end
+      local root_slash = root:sub(-1) == "/" and root or (root .. "/")
+      if as_abs:sub(1, #root_slash) ~= root_slash then
+        notify.warn("file is outside the jj workspace")
+        return
+      end
+      path = as_abs:sub(#root_slash + 1)
+    else
+      root = cli.find_workspace_root(opts.cwd or vim.fn.getcwd())
+      if not root then
+        notify.error("not a jj workspace")
+        return
+      end
+      path = given
+    end
+  else
+    local name = vim.api.nvim_buf_get_name(bufnr)
+    if not name or name == "" then
+      notify.warn("annotate requires a file")
+      return
+    end
+    local abs = vim.fn.fnamemodify(name, ":p")
+    root = cli.find_workspace_root(opts.cwd or vim.fn.fnamemodify(abs, ":h"))
+    if not root then
+      notify.error("not a jj workspace")
+      return
+    end
+    local root_slash = root:sub(-1) == "/" and root or (root .. "/")
+    if abs:sub(1, #root_slash) ~= root_slash then
+      notify.warn("file is outside the jj workspace")
+      return
+    end
+    path = abs:sub(#root_slash + 1)
+  end
+
+  require("jujutsu.buffers.annotate").open(root, {
+    path = path,
+    line = line,
+    revision = opts.revision,
+  })
 end
 
 function M.get_config() return config.values end

@@ -5,62 +5,80 @@ local config = require("jujutsu.config")
 ---@field root string
 ---@field callback fun()
 ---@field timer uv.uv_timer_t|nil
+---@field name string
 
 local M = {}
 
----@type Watcher|nil
-local active
+---@type table<string, Watcher>
+local active = {}
 
-local function stop_handle()
-  if not active then return end
-  if active.timer then
-    active.timer:stop()
-    active.timer:close()
-    active.timer = nil
+---@param name string
+local function stop_handle(name)
+  local w = active[name]
+  if not w then return end
+  if w.timer then
+    w.timer:stop()
+    w.timer:close()
+    w.timer = nil
   end
-  if active.handle then
-    active.handle:stop()
-    active.handle:close()
-    active.handle = nil
+  if w.handle then
+    w.handle:stop()
+    w.handle:close()
+    w.handle = nil
   end
 end
 
+---Start a named fs watcher on `{root}/.jj`. Multiple names may watch the same root.
 ---@param root string
 ---@param callback fun()
-function M.start(root, callback)
+---@param name? string defaults to "default" (status buffer)
+function M.start(root, callback, name)
+  name = name or "default"
   if not config.values.filewatcher.enabled then return end
-  M.stop()
+  M.stop(name)
   local path = root .. "/.jj"
   if not vim.uv.fs_stat(path) then return end
 
   local handle = vim.uv.new_fs_event()
   if not handle then return end
 
-  active = {
+  local w = {
     handle = handle,
     root = root,
     callback = callback,
+    name = name,
   }
+  active[name] = w
 
   local debounce_ms = 200
   handle:start(path, { recursive = true }, function(err)
-    if err or not active then return end
-    if active.timer then
-      active.timer:stop()
+    if err or not active[name] then return end
+    local cur = active[name]
+    if cur.timer then
+      cur.timer:stop()
     else
-      active.timer = vim.uv.new_timer()
+      cur.timer = vim.uv.new_timer()
     end
-    active.timer:start(debounce_ms, 0, function()
+    cur.timer:start(debounce_ms, 0, function()
       vim.schedule(function()
-        if active and active.callback then active.callback() end
+        local live = active[name]
+        if live and live.callback then live.callback() end
       end)
     end)
   end)
 end
 
-function M.stop()
-  stop_handle()
-  active = nil
+---@param name? string defaults to "default"
+function M.stop(name)
+  name = name or "default"
+  stop_handle(name)
+  active[name] = nil
+end
+
+function M.stop_all()
+  for name in pairs(active) do
+    M.stop(name)
+  end
 end
 
 return M

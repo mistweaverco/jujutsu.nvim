@@ -96,6 +96,17 @@ jj.setup({
   },
   diff_viewer = nil, -- "diffview" | "codediff" | nil = auto
   file_history = { limit = 200, panel_height = 16 },
+  annotate = { panel_height = 16 },
+  disable_signs = false, -- gutter jjsigns (add/change/delete)
+  signs = {
+    item = { ">", "v" },
+    section = { ">", "v" },
+    add = { text = "┃" },
+    change = { text = "┃" },
+    delete = { text = "▁" },
+    topdelete = { text = "▔" },
+    changedelete = { text = "~" },
+  },
   forge = { pr_integration = true },
   commit_date_format = "absolute", -- "absolute" | "relative" | strftime (e.g. "%Y-%m-%d %H:%M")
   log_date_format = "absolute",
@@ -107,9 +118,12 @@ jj.open({ cwd = vim.fn.expand("%:p:h") })
 jj.open({ "change" })                  -- open a popup by name
 jj.close()
 jj.refresh()
+jj.annotate()                          -- annotate current buffer at cursor line
+jj.annotate({ path = "src/main.lua", line = 10 })
 
 -- Bindable action for your own keymaps:
 vim.keymap.set("n", "<leader>jc", jj.action("change", "commit"))
+vim.keymap.set("n", "<leader>jb", jj.annotate)
 ```
 
 ### Popup Names
@@ -126,6 +140,24 @@ vim.keymap.set("n", "<leader>jc", jj.action("change", "commit"))
 - `squash`
 - `undo`
 - `workspace`
+
+## jjsigns
+
+Gutter signs for working-copy line changes (like gitsigns, display-only).
+Driven by `jj diff --git` against `@` parents. Refreshes on buffer enter /
+write / focus and when `.jj` changes.
+
+Disable with `disable_signs = true`, or customize glyphs via `signs.add` /
+`signs.change` / `signs.delete` / `signs.topdelete` / `signs.changedelete`.
+
+## Annotate
+
+`jj file annotate` blame view: annotated lines on top, commits that touched the
+file in a bottom panel (same idea as `dc`). Selecting a commit highlights its
+lines in the annotate buffer.
+
+- Magit: Diff popup `da` (file under cursor)
+- Lua: `require("jujutsu").annotate()` (current buffer + cursor line)
 
 ## Status Buffer
 
@@ -145,6 +177,7 @@ recent commits, and bookmarks.
 | `d` | Diff |
 | `dd` | Working-copy side-by-side diff |
 | `dc` | Change history (file under cursor → that path; revision → focus that change; else repo-wide) |
+| `da` | Annotate file under cursor (`jj file annotate` + file history panel) |
 | `dr` | Range side-by-side diff |
 | `dt` | Trunk/main/master..@ side-by-side diff |
 | `f` | Fetch |

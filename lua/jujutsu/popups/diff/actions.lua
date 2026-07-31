@@ -22,6 +22,17 @@ function M.change(popup)
   require("jujutsu.buffers.file_history").open(root, { revision = rev, path = path })
 end
 
+function M.annotate(popup)
+  local root = common.root(popup)
+  local path = common.path(popup)
+  if not path or path == "" then
+    require("jujutsu.notify").warn("annotate requires a file under the cursor")
+    return
+  end
+  local rev = common.commit(popup)
+  require("jujutsu.buffers.annotate").open(root, { path = path, revision = rev })
+end
+
 function M.range(popup)
   local root = common.root(popup)
   local from = finder.pick_revision({ prompt = "Diff from", cwd = root })

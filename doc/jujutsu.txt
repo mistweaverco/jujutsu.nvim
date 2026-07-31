@@ -9,6 +9,8 @@ CONTENTS                                                     *jujutsu-contents*
   4. API ......................... |jujutsu-api|
   5. Mappings .................... |jujutsu-mappings|
   6. Integrations ................ |jujutsu-integrations|
+  7. Signs ....................... |jujutsu-signs|
+  8. Annotate .................... |jujutsu-annotate|
 
 ==============================================================================
 1. INTRODUCTION                                                 *jujutsu-intro*
@@ -37,6 +39,16 @@ Without a picker plugin, a built-in fuzzy finder is used.
   require("jujutsu").setup({
     kind = "tab",
     use_default_keymaps = true,
+    disable_signs = false,
+    signs = {
+      add = { text = "┃" },
+      change = { text = "┃" },
+      delete = { text = "▁" },
+      topdelete = { text = "▔" },
+      changedelete = { text = "~" },
+    },
+    annotate = { panel_height = 16 },
+    file_history = { limit = 200, panel_height = 16 },
     mappings = {
       status = { ["q"] = "Close" },
       popup = { ["c"] = "ChangePopup" },
@@ -58,6 +70,7 @@ Example lazy.nvim keys (no `cmd`):
 >
   keys = {
     { "<leader>gg", function() require("jujutsu").open() end },
+    { "<leader>jb", function() require("jujutsu").annotate() end },
   }
 <
 
@@ -76,12 +89,26 @@ open({opts})              Open the status buffer, or a popup if opts[1] is set.
 close()                   Close the status buffer.
 
                                                          *jujutsu.refresh()*
-refresh()                 Refresh the status buffer.
+refresh()                 Refresh the status buffer (and jjsigns / lualine).
+
+                                                        *jujutsu.annotate()*
+annotate({opts?})         Open `jj file annotate` for the current buffer
+                          (or opts.path) at the cursor line (or opts.line).
+                          Shows a bottom panel of commits that touched the
+                          file (like Diff popup `dc`).
+
+  Options: ~
+    bufnr      integer  buffer number (default: current)
+    line       integer  1-based line to focus
+    path       string   absolute or repo-relative path
+    revision   string   starting revision for annotate
+    cwd        string   workspace directory hint
 
                                                           *jujutsu.action()*
 action({popup}, {action}, {args?})
                           Return a function that runs a popup action.
                           Useful for custom keymaps.
+                          Example: `action("diff", "annotate")`
 
                                                          *jujutsu.setup()*
 setup({opts})             Configure the plugin.
@@ -100,6 +127,9 @@ status, and bookmark commit history).
 
 Log view: `<cr>` open commit, `S` open `--stat` view, `P` split popup.
 
+Diff popup: `dd` / `dr` / `dt` side-by-side diffsplit; `dc` change history;
+`da` annotate (file under cursor).
+
 ==============================================================================
 6. INTEGRATIONS                                           *jujutsu-integrations*
 
@@ -115,6 +145,8 @@ parent/from ↔ to) instead of a flat unified patch. `dc` opens change history
 pre-selects that change; with a file under the cursor it scopes history to that
 path; otherwise repo-wide. Opening a change (`<CR>`) uses the same side-by-side
 diff for that revision.
+
+`da` opens annotate for the file under the cursor (see |jujutsu-annotate|).
 
 Forge: when `forge.pr_integration` is true and `gh` is available, bookmarks
 may show PR numbers; `o` opens the PR or commit in the browser.
@@ -138,6 +170,48 @@ Repo-wide working-copy `+`/`~`/`-` line counts (refreshed on write / cwd /
 focus, not BufEnter). Rev is prefixed with a branch icon; bookmarks are the
 closest ancestors of `@` (with ahead count), like oh-my-posh. Also:
 `.component()`, `.rev()`, `.bookmark()`, `.diff()`, `.status()`.
+
+==============================================================================
+7. SIGNS                                                         *jujutsu-signs*
+
+jjsigns show working-copy line changes in the signcolumn (add / change /
+delete), similar to gitsigns but display-only (no hunk navigation or reset).
+
+Signs come from `jj diff --git` against the working-copy parents. They refresh
+on BufEnter / BufWritePost / FocusGained and when `.jj` changes (filewatcher).
+
+Disable with `disable_signs = true`. Glyphs are configured under `signs`:
+>
+  signs = {
+    add = { text = "┃" },
+    change = { text = "┃" },
+    delete = { text = "▁" },
+    topdelete = { text = "▔" },
+    changedelete = { text = "~" },
+  }
+<
+
+Highlight groups: `JujutsuSignsAdd`, `JujutsuSignsChange`, `JujutsuSignsDelete`.
+
+==============================================================================
+8. ANNOTATE                                                   *jujutsu-annotate*
+
+Built-in `jj file annotate` (blame) UI.
+
+Layout: annotated file on top (change id, author, date, content); bottom panel
+lists commits that touched the file (same data source as Diff popup `dc`).
+Selecting a commit highlights its lines and jumps to the first match.
+
+Entry points: ~
+- Diff popup `da` - file under cursor in the status buffer
+- |jujutsu.annotate()| - current buffer and cursor line
+- `require("jujutsu").action("diff", "annotate")`
+
+Config: `annotate.panel_height` (default 16). File history limit comes from
+`file_history.limit`.
+
+Highlight groups: `JujutsuAnnotateHash`, `JujutsuAnnotateAuthor`,
+`JujutsuAnnotateDate`, `JujutsuAnnotateCurrent`, `JujutsuAnnotateSelected`.
 
 ==============================================================================
 vim:tw=78:ts=8:ft=help:norl:

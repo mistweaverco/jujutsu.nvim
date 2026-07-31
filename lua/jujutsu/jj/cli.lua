@@ -148,7 +148,9 @@ define_command("diffedit", {
 })
 define_command("file list", { options = { revision = "-r" } })
 define_command("file untrack", {})
-define_command("file annotate", {})
+define_command("file annotate", {
+  options = { template = "-T", revision = "-r" },
+})
 define_command("file show", { options = { revision = "-r" } })
 define_command("workspace add", {
   options = { name = "--name", revision = "-r", message = "-m", sparse_patterns = "--sparse-patterns" },

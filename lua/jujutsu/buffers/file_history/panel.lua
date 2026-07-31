@@ -149,9 +149,10 @@ end
 ---@param root string
 ---@param win integer
 ---@param path? string
+---@param name? string buffer name (default file-history panel)
 ---@return FileHistoryPanel
-function M.create(root, win, path)
-  local buf = Buffer.create("jujutsu://file-history/panel", "jujutsu-file-history")
+function M.create(root, win, path, name)
+  local buf = Buffer.create(name or "jujutsu://file-history/panel", "jujutsu-file-history")
   vim.api.nvim_win_set_buf(win, buf.bufnr)
   buf.winid = win
   vim.wo[win].cursorline = true

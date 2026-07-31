@@ -145,6 +145,14 @@ function M.setup()
     JujutsuLualineDelete = { fg = p.bg_red, bold = p.bold },
     JujutsuLualineRev = { fg = p.cyan, bold = p.bold },
     JujutsuLualineBookmark = { fg = p.blue, bold = p.bold },
+    JujutsuSignsAdd = { fg = p.bg_green, bold = p.bold },
+    JujutsuSignsChange = { fg = p.yellow, bold = p.bold },
+    JujutsuSignsDelete = { fg = p.bg_red, bold = p.bold },
+    JujutsuAnnotateHash = { fg = p.purple },
+    JujutsuAnnotateAuthor = { fg = p.blue },
+    JujutsuAnnotateDate = { fg = p.grey },
+    JujutsuAnnotateCurrent = { bg = p.bg2 },
+    JujutsuAnnotateSelected = { bg = p.bg3 },
   }
 
   for name, opts in pairs(groups) do

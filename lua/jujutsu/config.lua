@@ -75,11 +75,20 @@ local defaults = {
     limit = 200,
     panel_height = 16,
   },
+  annotate = {
+    kind = "tab",
+    panel_height = 16,
+  },
   popup = { kind = "split" },
   signs = {
     hunk = { "", "" },
     item = { ">", "v" },
     section = { ">", "v" },
+    add = { text = "┃" },
+    change = { text = "┃" },
+    delete = { text = "▁" },
+    topdelete = { text = "▔" },
+    changedelete = { text = "~" },
   },
   integrations = {
     telescope = nil,
