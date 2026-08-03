@@ -150,6 +150,8 @@ define_command("file list", { options = { revision = "-r" } })
 define_command("file untrack", {})
 define_command("file annotate", {
   options = { template = "-T", revision = "-r" },
+  -- `jj file annotate` takes a single file path (`parse_file_path`), not a fileset.
+  fileset_paths = false,
 })
 define_command("file show", { options = { revision = "-r" } })
 define_command("workspace add", {
@@ -190,9 +192,11 @@ mt_builder.__index = function(tbl, action)
   elseif action == "files" or action == "paths" then
     return function(...)
       for _, v in ipairs({ ... }) do
-        -- Always wrap concrete paths as root-file:"…" so ()[]*? stay literal.
-        -- Explicit fileset expressions (file:, glob:, …) are passed through unchanged.
-        table.insert(state.files, util.fileset_literal(tostring(v)))
+        local path = tostring(v)
+        -- Wrap concrete paths as root-file:"…" so ()[]*? stay literal for fileset
+        -- args. Commands that take a plain path (e.g. `file annotate`) opt out.
+        if config.fileset_paths ~= false then path = util.fileset_literal(path) end
+        table.insert(state.files, path)
       end
       return tbl
     end
