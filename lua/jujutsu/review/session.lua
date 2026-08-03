@@ -12,7 +12,10 @@ local M = {}
 ---@field left_rev string
 ---@field right_rev string
 ---@field comments ReviewComment[]
----@field remote_comments table[] forge comments from the web UI
+---@field remote_comments table[] forge comments from the web UI (flat; derived from cache)
+---@field remote_comment_cache table<string, table[]> path → remote comments (in-memory)
+---@field remote_comments_loaded boolean
+---@field remote_comments_fetched_at integer|nil
 ---@field reviewed_files table<string, boolean>
 ---@field dirty boolean
 ---@field submitted boolean
@@ -92,11 +95,93 @@ function M.create(opts)
     right_rev = opts.right_rev,
     comments = (disk and disk.comments) or {},
     remote_comments = {},
+    remote_comment_cache = {},
+    remote_comments_loaded = false,
+    remote_comments_fetched_at = nil,
     reviewed_files = (disk and disk.reviewed_files) or {},
     dirty = false,
     submitted = (disk and disk.submitted) or false,
   }
   return session
+end
+
+---Index a flat remote comment list into the in-memory path cache.
+---@param session ReviewSession
+---@param comments table[]
+function M.set_remote_comments(session, comments)
+  comments = comments or {}
+  session.remote_comments = comments
+  local by_path = {}
+  for _, c in ipairs(comments) do
+    local path = c.path
+    if path and path ~= "" then
+      by_path[path] = by_path[path] or {}
+      table.insert(by_path[path], c)
+    end
+  end
+  session.remote_comment_cache = by_path
+  session.remote_comments_loaded = true
+  session.remote_comments_fetched_at = os.time()
+end
+
+---Fetch remote review comments from the forge into the in-memory cache.
+---@param session ReviewSession
+---@return boolean ok
+function M.refresh_remote_comments(session)
+  if not session.remote or not session.number then
+    M.set_remote_comments(session, {})
+    return true
+  end
+  local provider = require("jujutsu.forge.provider")
+  local comments = provider.list_review_comments(session.root, session.number, session.remote)
+  M.set_remote_comments(session, comments or {})
+  return true
+end
+
+---Refresh cached remote comments for one file.
+---Most forge APIs only list all PR comments; we refresh the shared in-memory
+---cache, then callers re-render this file's overlays / filter badges.
+---@param session ReviewSession
+---@param path string
+---@return boolean ok, string|nil err
+function M.refresh_remote_comments_for_path(session, path)
+  if not path or path == "" then return false, "No file path" end
+  local ok = M.refresh_remote_comments(session)
+  if not ok then return false, "Failed to refresh remote comments" end
+  session.remote_comment_cache = session.remote_comment_cache or {}
+  if session.remote_comment_cache[path] == nil then session.remote_comment_cache[path] = {} end
+  return true
+end
+
+---Load remote comments once; later calls use the in-memory cache.
+---@param session ReviewSession
+---@return boolean
+function M.ensure_remote_comments(session)
+  if session.remote_comments_loaded then return true end
+  return M.refresh_remote_comments(session)
+end
+
+---@param session ReviewSession
+---@param path string
+---@return table[]
+function M.remote_comments_for_path(session, path)
+  if not path then return {} end
+  local cached = session.remote_comment_cache and session.remote_comment_cache[path]
+  return cached or {}
+end
+
+---@param session ReviewSession
+---@param path string
+---@return table[] remote + local comments for overlays on one file
+function M.overlay_comments_for_path(session, path)
+  local out = {}
+  for _, c in ipairs(M.remote_comments_for_path(session, path)) do
+    table.insert(out, c)
+  end
+  for _, c in ipairs(session.comments or {}) do
+    if c.path == path then table.insert(out, c) end
+  end
+  return out
 end
 
 ---@param session ReviewSession
@@ -110,6 +195,20 @@ function M.all_overlay_comments(session)
     table.insert(out, c)
   end
   return out
+end
+
+---Paths that have local and/or remote comments (for the DiffView filter).
+---@param session ReviewSession
+---@return table<string, boolean>
+function M.paths_with_comments(session)
+  local paths = {}
+  for path, list in pairs(session.remote_comment_cache or {}) do
+    if list and #list > 0 then paths[path] = true end
+  end
+  for _, c in ipairs(session.comments or {}) do
+    if c.path and c.path ~= "" then paths[c.path] = true end
+  end
+  return paths
 end
 
 ---@param session ReviewSession

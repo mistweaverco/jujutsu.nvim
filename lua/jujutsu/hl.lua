@@ -136,7 +136,10 @@ function M.setup()
     JujutsuReviewComment = { fg = p.yellow },
     JujutsuReviewSign = { fg = p.yellow, bold = p.bold },
     JujutsuReviewRemote = { fg = p.cyan },
+    JujutsuReviewReply = { fg = p.cyan, italic = p.italic },
     JujutsuReviewRemoteSign = { fg = p.cyan, bold = p.bold },
+    JujutsuReviewAuthor = { fg = p.blue, bold = p.bold },
+    JujutsuReviewDate = { fg = p.grey },
     JujutsuReviewReviewed = { fg = p.green, bold = p.bold },
     JujutsuStatGraph = { fg = p.grey },
     JujutsuGraph = { fg = p.grey },
@@ -158,6 +161,17 @@ function M.setup()
     JujutsuAnnotateDate = { fg = p.grey },
     JujutsuAnnotateCurrent = { bg = p.bg2 },
     JujutsuAnnotateSelected = { bg = p.bg3 },
+    JujutsuIssueTitle = { fg = p.fg, bold = p.bold },
+    JujutsuIssueBody = { fg = p.fg },
+    JujutsuIssueHeading = { fg = p.purple, bold = p.bold },
+    JujutsuIssueList = { fg = p.fg },
+    JujutsuIssueCode = { fg = p.cyan, bg = p.bg1 },
+    JujutsuIssueLabel = { fg = p.orange },
+    JujutsuIssueCommentAuthor = { fg = p.blue, bold = p.bold },
+    JujutsuIssueStateOpen = { fg = p.green, bold = p.bold },
+    JujutsuIssueStateClosed = { fg = p.red, bold = p.bold },
+    JujutsuIssueStateMerged = { fg = p.purple, bold = p.bold },
+    JujutsuIssueStateDraft = { fg = p.grey, bold = p.bold },
   }
 
   for name, opts in pairs(groups) do

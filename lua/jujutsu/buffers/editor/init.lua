@@ -14,6 +14,7 @@ local M = {}
 ---@field on_submit? fun()
 ---@field on_abort? fun()
 ---@field initial? string
+---@field apply? fun(msg: string)  -- if set, called instead of describe/commit
 
 ---@param opts EditorOpts
 function M.open(opts)
@@ -23,9 +24,13 @@ function M.open(opts)
   local mode = opts.mode or "describe"
 
   local current = ""
-  local res = cli.log.revisions(revision).no_graph.template("description").limit(1).call({ cwd = root, hidden = true })
-  if res.code == 0 then current = table.concat(res.stdout, "\n") end
-  if opts.initial then current = opts.initial end
+  if not opts.initial then
+    local res =
+      cli.log.revisions(revision).no_graph.template("description").limit(1).call({ cwd = root, hidden = true })
+    if res.code == 0 then current = table.concat(res.stdout, "\n") end
+  else
+    current = opts.initial
+  end
 
   local lines = vim.split(current, "\n", { plain = true })
   if #lines == 1 and lines[1] == "" then lines = { "" } end
@@ -62,8 +67,12 @@ function M.open(opts)
     end
     submitted = true
     async.void(function()
-      local r = cli.describe.revision(revision).message(msg).call_async({ cwd = root, hidden = false })
-      if r.code == 0 and mode == "commit" then cli.new.call_async({ cwd = root, hidden = false }) end
+      if opts.apply then
+        opts.apply(msg)
+      else
+        local r = cli.describe.revision(revision).message(msg).call_async({ cwd = root, hidden = false })
+        if r.code == 0 and mode == "commit" then cli.new.call_async({ cwd = root, hidden = false }) end
+      end
       vim.schedule(function()
         if vim.api.nvim_buf_is_valid(buf.bufnr) then vim.api.nvim_buf_delete(buf.bufnr, { force = true }) end
         if opts.on_submit then opts.on_submit() end

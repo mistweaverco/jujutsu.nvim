@@ -221,6 +221,21 @@ function M.review(opts)
   require("jujutsu.review").open(opts)
 end
 
+---@class IssuePanelOpts
+---@field cwd? string
+---@field root? string
+---@field number? integer|string
+---@field kind? "issue"|"pr"
+
+---Open the Issue/PR conversation side panel.
+---@param opts? IssuePanelOpts
+function M.issue_panel(opts)
+  ensure_setup()
+  opts = opts or {}
+  if opts.cwd and not opts.root then opts.root = cli.find_workspace_root(opts.cwd) or opts.cwd end
+  require("jujutsu.issue_panel").open(opts)
+end
+
 function M.get_config() return config.values end
 
 M.config = config

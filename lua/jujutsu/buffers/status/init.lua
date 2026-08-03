@@ -1131,6 +1131,18 @@ local function bind_actions(bufnr)
       end
     end,
     OpenBrowser = function() require("jujutsu.forge").open_under_cursor(get_env()) end,
+    IssuePanel = function()
+      local item = item_under_cursor()
+      local number = nil
+      if item and item.type == "bookmark" and item.data and item.data.bookmark and item.data.bookmark.pr then
+        number = item.data.bookmark.pr
+      end
+      require("jujutsu.issue_panel").open({
+        root = instance.root,
+        number = number,
+        kind = number and "pr" or nil,
+      })
+    end,
     YankSelected = function()
       local item = item_under_cursor()
       if not item then return end

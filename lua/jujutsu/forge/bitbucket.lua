@@ -26,7 +26,7 @@ end
 ---@param remote { owner: string, repo: string }
 ---@param method string
 ---@param path_or_url string
----@param body? table
+---@param body? table|false nil = no body; table = JSON body; false unused
 ---@return table|nil, string|nil
 local function api(remote, method, path_or_url, body)
   local user, token, auth_err = resolve(remote)
@@ -39,12 +39,13 @@ local function api(remote, method, path_or_url, body)
   if type(user) ~= "string" or user == "" or type(token) ~= "string" or token == "" then
     return nil, "Missing Bitbucket credentials"
   end
+  local has_body = body ~= nil
   local headers = {
     Authorization = http.basic_auth(user, token),
     Accept = "application/json",
-    ["Content-Type"] = body and "application/json" or nil,
+    ["Content-Type"] = has_body and "application/json" or nil,
   }
-  local res = http.request(method, url, headers, body and vim.json.encode(body) or nil)
+  local res = http.request(method, url, headers, has_body and vim.json.encode(body) or nil)
   if res.err then return nil, res.err end
   return res.json or {}, nil
 end
@@ -93,14 +94,17 @@ function M.list_prs(_, remote)
   return out, nil
 end
 
----@param _root string
+---@param _ string
 ---@param remote { owner: string, repo: string }
 ---@param number integer|string
 ---@return table|nil, string|nil
-function M.get_pr(_root, remote, number)
+function M.get_pr(_, remote, number)
   if not M.available(remote) then return nil, "Bitbucket credentials missing or curl unavailable" end
-  local pr, err =
-    api(remote, "GET", string.format("/repositories/%s/%s/pullrequests/%s", remote.owner, remote.repo, tostring(number)))
+  local pr, err = api(
+    remote,
+    "GET",
+    string.format("/repositories/%s/%s/pullrequests/%s", remote.owner, remote.repo, tostring(number))
+  )
   if err then return nil, err end
   if type(pr) ~= "table" then return nil, "invalid PR response" end
   local html = ""
@@ -122,7 +126,7 @@ end
 ---@param remote { owner: string, repo: string }
 ---@param number integer|string
 ---@param opts { event?: string, body?: string, comments?: { path: string, body: string, line?: integer, side?: string, start_line?: integer }[] }
----@return boolean, string|nil
+---@return boolean, string|nil, { posted_comments?: boolean }|nil
 function M.submit_review(root, remote, number, opts)
   if not M.available(remote) then return false, "Bitbucket credentials missing or curl unavailable" end
   opts = opts or {}
@@ -141,6 +145,9 @@ function M.submit_review(root, remote, number, opts)
     )
   end
 
+  local posted_comments = false
+  local function meta() return { posted_comments = posted_comments } end
+
   for _, c in ipairs(opts.comments or {}) do
     local payload = {
       content = { raw = c.body or "" },
@@ -157,34 +164,52 @@ function M.submit_review(root, remote, number, opts)
       payload.inline = inline
     end
     local _, cerr = api(remote, "POST", comments_url, payload)
-    if cerr then return false, cerr end
+    if cerr then return false, "Posting comment failed: " .. cerr, meta() end
+    posted_comments = true
   end
 
   if opts.body and opts.body ~= "" then
     local _, cerr = api(remote, "POST", comments_url, { content = { raw = opts.body } })
-    if cerr then return false, cerr end
+    if cerr then return false, "Posting review body failed: " .. cerr, meta() end
+    posted_comments = true
   end
 
   local event = opts.event or "COMMENT"
+  local function event_err(action, api_err)
+    local hint = ""
+    local msg = tostring(api_err or "")
+    if
+      msg:match("HTTP 401")
+      or msg:lower():find("privilege scopes", 1, true)
+      or msg:find("write:pullrequest", 1, true)
+    then
+      hint =
+        " Create an Atlassian API token that includes write:pullrequest:bitbucket (your token currently looks read-only for PRs), then update stored credentials."
+    elseif msg:match("HTTP 403") then
+      hint = " You may lack permission to " .. action .. " on this PR."
+    end
+    local already = posted_comments and " Comments were already posted to Bitbucket." or ""
+    return string.format("%s failed: %s.%s%s", action, api_err or "unknown error", already, hint)
+  end
+
   if event == "APPROVE" then
+    -- Bitbucket approve/request-changes are body-less POSTs.
     local _, aerr = api(
       remote,
       "POST",
-      string.format("/repositories/%s/%s/pullrequests/%s/approve", remote.owner, remote.repo, tostring(number)),
-      {}
+      string.format("/repositories/%s/%s/pullrequests/%s/approve", remote.owner, remote.repo, tostring(number))
     )
-    if aerr then return false, aerr end
+    if aerr then return false, event_err("Approve", aerr), meta() end
   elseif event == "REQUEST_CHANGES" then
     local _, rerr = api(
       remote,
       "POST",
-      string.format("/repositories/%s/%s/pullrequests/%s/request-changes", remote.owner, remote.repo, tostring(number)),
-      {}
+      string.format("/repositories/%s/%s/pullrequests/%s/request-changes", remote.owner, remote.repo, tostring(number))
     )
-    if rerr then return false, rerr end
+    if rerr then return false, event_err("Request changes", rerr), meta() end
   end
 
-  return true
+  return true, nil, meta()
 end
 
 ---@param root string
@@ -209,43 +234,230 @@ function M.list_review_comments(root, remote, number)
     comments_url = comments_url .. sep .. "pagelen=100"
   end
 
+  local threads = require("jujutsu.review.threads")
   local values = select(1, fetch_all(remote, comments_url))
   local out = {}
   for _, c in ipairs(values or {}) do
+    local author = "unknown"
+    if c.user then author = c.user.display_name or c.user.nickname or c.user.uuid or author end
+    local body = ""
+    if type(c.content) == "table" then
+      body = c.content.raw or c.content.markup or ""
+    elseif type(c.content) == "string" then
+      body = c.content
+    end
+    local parent_id = nil
+    if type(c.parent) == "table" and c.parent.id then parent_id = threads.remote_id(c.parent.id) end
+
+    local path, side, line, start_line
     local inline = c.inline
     if type(inline) == "table" and inline.path then
-      local side, line
+      path = inline.path
       if inline.to then
         side, line = "RIGHT", inline.to
       elseif inline.from then
         side, line = "LEFT", inline.from
       end
-      if line then
-        local author = "unknown"
-        if c.user then author = c.user.display_name or c.user.nickname or c.user.uuid or author end
-        local body = ""
-        if type(c.content) == "table" then
-          body = c.content.raw or c.content.markup or ""
-        elseif type(c.content) == "string" then
-          body = c.content
-        end
-        table.insert(out, {
-          id = "remote-" .. tostring(c.id),
-          path = inline.path,
-          side = side,
-          line = tonumber(line) or line,
-          start_line = inline.start_to or inline.start_from,
-          body = body,
-          author = author,
-          outdated = false,
-          url = c.links and c.links.html and c.links.html.href or nil,
-          remote = true,
-          kind = "line",
-        })
-      end
+      start_line = inline.start_to or inline.start_from
+    end
+
+    -- Keep replies without inline so we can inherit location from the parent.
+    if (path and line) or parent_id then
+      table.insert(out, {
+        id = threads.remote_id(c.id),
+        path = path,
+        side = side,
+        line = line and (tonumber(line) or line) or nil,
+        start_line = start_line,
+        body = body,
+        author = author,
+        outdated = false,
+        url = c.links and c.links.html and c.links.html.href or nil,
+        remote = true,
+        kind = "line",
+        parent_id = parent_id,
+        provider = "bitbucket",
+        created_at = c.created_on,
+        updated_at = c.updated_on,
+        supports_reply = true,
+      })
     end
   end
-  return out
+  threads.inherit_locations(out)
+  local filtered = {}
+  for _, c in ipairs(out) do
+    if c.path and c.line then table.insert(filtered, c) end
+  end
+  return filtered
+end
+
+---@param _ string
+---@param remote { owner: string, repo: string }
+---@param number integer|string
+---@param opts? { kind?: "issue"|"pr" }
+---@return ForgeTopic|nil, string|nil
+function M.get_topic(_, remote, number, opts)
+  if not M.available(remote) then return nil, "Bitbucket credentials missing or curl unavailable" end
+  opts = opts or {}
+  local kind = opts.kind or "pr"
+
+  if kind == "issue" then
+    local issue, err =
+      api(remote, "GET", string.format("/repositories/%s/%s/issues/%s", remote.owner, remote.repo, tostring(number)))
+    if err or type(issue) ~= "table" then return nil, err or "failed to fetch issue" end
+    local html = ""
+    if issue.links and issue.links.html and issue.links.html.href then html = issue.links.html.href end
+    local assignees = {}
+    if issue.assignee and issue.assignee.display_name then table.insert(assignees, issue.assignee.display_name) end
+    return {
+      kind = "issue",
+      number = issue.id or number,
+      title = issue.title or "",
+      body = (issue.content and (issue.content.raw or issue.content.markup)) or "",
+      state = (issue.state and (issue.state.name or issue.state)) or "open",
+      author = (issue.reporter and (issue.reporter.display_name or issue.reporter.nickname)) or "unknown",
+      created_at = issue.created_on,
+      updated_at = issue.updated_on,
+      labels = {},
+      assignees = assignees,
+      url = html,
+      repo = remote.owner .. "/" .. remote.repo,
+    }
+  end
+
+  local pr, err = M.get_pr(_, remote, number)
+  if err or not pr then return nil, err or "failed to fetch PR" end
+  local raw = pr._raw or {}
+  local state = "open"
+  if raw.state == "MERGED" then
+    state = "merged"
+  elseif raw.state == "DECLINED" or raw.state == "SUPERSEDED" then
+    state = "closed"
+  elseif raw.state then
+    state = string.lower(tostring(raw.state))
+  end
+  local author = "unknown"
+  if raw.author then author = raw.author.display_name or raw.author.nickname or author end
+  local reviewers = {}
+  for _, p in ipairs(raw.participants or {}) do
+    if p.user then table.insert(reviewers, p.user.display_name or p.user.nickname or "?") end
+  end
+  return {
+    kind = "pr",
+    number = pr.number,
+    title = pr.title or "",
+    body = pr.body or "",
+    state = state,
+    merged = state == "merged",
+    author = author,
+    created_at = raw.created_on,
+    updated_at = raw.updated_on,
+    labels = {},
+    assignees = reviewers,
+    url = pr.url or "",
+    repo = remote.owner .. "/" .. remote.repo,
+  }
+end
+
+---@param _ string
+---@param remote { owner: string, repo: string }
+---@param number integer|string
+---@param opts? { kind?: "issue"|"pr" }
+---@return ForgeConversationComment[], string|nil
+function M.list_comments(_, remote, number, opts)
+  if not M.available(remote) then return {}, "Bitbucket credentials missing or curl unavailable" end
+  opts = opts or {}
+  local kind = opts.kind or "pr"
+  local url
+  if kind == "issue" then
+    url = string.format(
+      "%s/repositories/%s/%s/issues/%s/comments?pagelen=100",
+      "https://api.bitbucket.org/2.0",
+      remote.owner,
+      remote.repo,
+      tostring(number)
+    )
+  else
+    url = string.format(
+      "%s/repositories/%s/%s/pullrequests/%s/comments?pagelen=100",
+      "https://api.bitbucket.org/2.0",
+      remote.owner,
+      remote.repo,
+      tostring(number)
+    )
+  end
+  local values, err = fetch_all(remote, url)
+  if err then return {}, err end
+  local out = {}
+  for _, c in ipairs(values) do
+    -- Skip pure inline review comments without general content for PR conversation
+    local body = ""
+    if type(c.content) == "table" then
+      body = c.content.raw or c.content.markup or ""
+    elseif type(c.content) == "string" then
+      body = c.content
+    end
+    if body ~= "" and (kind == "issue" or not c.inline) then
+      local author = "unknown"
+      if c.user then author = c.user.display_name or c.user.nickname or author end
+      table.insert(out, {
+        id = tostring(c.id),
+        author = author,
+        created_at = c.created_on,
+        updated_at = c.updated_on,
+        body = body,
+        url = c.links and c.links.html and c.links.html.href or nil,
+        kind = "comment",
+      })
+    end
+  end
+  return out, nil
+end
+
+---@param _ string
+---@param remote { owner: string, repo: string }
+---@param number integer|string
+---@param body string
+---@param opts? { kind?: "issue"|"pr" }
+---@return boolean, string|nil
+function M.post_comment(_, remote, number, body, opts)
+  if not M.available(remote) then return false, "Bitbucket credentials missing or curl unavailable" end
+  if not body or vim.trim(body) == "" then return false, "Empty comment" end
+  opts = opts or {}
+  local kind = opts.kind or "pr"
+  local path
+  if kind == "issue" then
+    path = string.format("/repositories/%s/%s/issues/%s/comments", remote.owner, remote.repo, tostring(number))
+  else
+    path = string.format("/repositories/%s/%s/pullrequests/%s/comments", remote.owner, remote.repo, tostring(number))
+  end
+  local _, err = api(remote, "POST", path, { content = { raw = body } })
+  if err then return false, err end
+  return true
+end
+
+---Reply to a PR comment (`parent.id`).
+---@param _ string
+---@param remote { owner: string, repo: string }
+---@param number integer|string
+---@param opts { parent_id: string|integer, body: string }
+---@return boolean, string|nil
+function M.post_reply(_, remote, number, opts)
+  if not M.available(remote) then return false, "Bitbucket credentials missing or curl unavailable" end
+  opts = opts or {}
+  local body = opts.body
+  if not body or vim.trim(body) == "" then return false, "Empty comment" end
+  local threads = require("jujutsu.review.threads")
+  local parent = tonumber(threads.raw_id(opts.parent_id))
+  if not parent then return false, "Missing parent comment id" end
+  local path =
+    string.format("/repositories/%s/%s/pullrequests/%s/comments", remote.owner, remote.repo, tostring(number))
+  local _, err = api(remote, "POST", path, {
+    content = { raw = body },
+    parent = { id = parent },
+  })
+  if err then return false, err end
+  return true
 end
 
 return M

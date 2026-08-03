@@ -1,5 +1,4 @@
 local cli = require("jujutsu.jj.cli")
-local config = require("jujutsu.config")
 local fuzzy = require("jujutsu.buffers.fuzzy_finder")
 
 local M = {}
@@ -34,181 +33,92 @@ end
 ---@field cwd? string
 ---@field refocus_status? boolean
 
----Pick from entries using best available picker.
+local function once_cb(cb)
+  local settled = false
+  return function(item)
+    if settled then return end
+    settled = true
+    -- Let the picker finish closing / restoring windows before the caller continues.
+    vim.schedule(function() cb(item) end)
+  end
+end
+
+---Keep reclaiming finder focus for a while (status/popup teardown often steals it).
+---@param target_win? integer when set, prefer this window id
+local function ensure_picker_focus(target_win)
+  local deadline = vim.uv.now() + 2000
+  local group = vim.api.nvim_create_augroup("JujutsuPickerFocus", { clear = true })
+
+  local function focus_picker()
+    if vim.uv.now() > deadline then
+      pcall(vim.api.nvim_del_augroup_by_name, "JujutsuPickerFocus")
+      return false
+    end
+
+    if target_win and vim.api.nvim_win_is_valid(target_win) then
+      if vim.api.nvim_get_current_win() ~= target_win then pcall(vim.api.nvim_set_current_win, target_win) end
+      pcall(vim.cmd, "redraw")
+      return true
+    end
+
+    local cur = vim.api.nvim_get_current_win()
+    if vim.api.nvim_win_is_valid(cur) then
+      local buf = vim.api.nvim_win_get_buf(cur)
+      if vim.api.nvim_buf_is_valid(buf) and vim.bo[buf].filetype == "jujutsu-finder" then return true end
+    end
+
+    for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+      if vim.api.nvim_win_is_valid(win) then
+        local buf = vim.api.nvim_win_get_buf(win)
+        if vim.api.nvim_buf_is_valid(buf) and vim.bo[buf].filetype == "jujutsu-finder" then
+          pcall(vim.api.nvim_set_current_win, win)
+          pcall(vim.cmd, "redraw")
+          return true
+        end
+      end
+    end
+    return false
+  end
+
+  vim.api.nvim_create_autocmd({ "WinEnter", "BufWinEnter", "WinNew", "WinLeave" }, {
+    group = group,
+    callback = function() vim.schedule(focus_picker) end,
+  })
+
+  local delay = 0
+  while delay <= 2000 do
+    if delay == 0 then
+      vim.schedule(focus_picker)
+    else
+      vim.defer_fn(focus_picker, delay)
+    end
+    delay = delay == 0 and 10 or (delay < 100 and delay + 20 or delay + 50)
+  end
+  vim.defer_fn(function() pcall(vim.api.nvim_del_augroup_by_name, "JujutsuPickerFocus") end, 2100)
+end
+
+---Pick from entries using the built-in fuzzy finder.
 ---@param opts FinderPickOpts
 ---@return string|string[]|nil
 function M.pick(opts)
   opts = opts or {}
-  local entries = opts.entries or {}
+  if not coroutine.running() then error("jujutsu.finder.pick must be called from async.void / a coroutine") end
 
-  -- Prefer external pickers; free-text is supported on Telescope/fzf/snacks below.
-  if config.check_integration("telescope") then
-    return M._telescope(opts)
-  elseif config.check_integration("fzf_lua") then
-    return M._fzf_lua(opts)
-  elseif config.check_integration("mini_pick") then
-    return M._mini_pick(opts)
-  elseif config.check_integration("snacks") then
-    return M._snacks(opts)
-  end
-
-  return fuzzy.pick({
-    prompt = opts.prompt or "select",
-    entries = entries,
-    allow_multi = opts.allow_multi,
-    allow_free_text = opts.allow_free_text,
-  })
-end
-
-local function to_strings(entries)
-  local out = {}
-  for _, e in ipairs(entries) do
-    if type(e) == "table" then
-      table.insert(out, e.text or tostring(e[1]))
-    else
-      table.insert(out, tostring(e))
-    end
-  end
-  return out
-end
-
-function M._telescope(opts)
-  local result
-  local done = false
   local async = require("jujutsu.async")
-  local co = coroutine.running()
-
-  local function run(cb)
-    local pickers = require("telescope.pickers")
-    local finders = require("telescope.finders")
-    local conf = require("telescope.config").values
-    local actions = require("telescope.actions")
-    local action_state = require("telescope.actions.state")
-    pickers
-      .new({}, {
-        prompt_title = opts.prompt or "select",
-        finder = finders.new_table({ results = to_strings(opts.entries or {}) }),
-        sorter = conf.generic_sorter({}),
-        attach_mappings = function(prompt_bufnr)
-          actions.select_default:replace(function()
-            local selection = action_state.get_selected_entry()
-            local picker = action_state.get_current_picker(prompt_bufnr)
-            local prompt = picker and picker:_get_prompt() or ""
-            actions.close(prompt_bufnr)
-            if selection and selection[1] then
-              cb(selection[1])
-            elseif opts.allow_free_text and prompt:match("%S") then
-              cb(prompt)
-            else
-              cb(nil)
-            end
-          end)
-          return true
-        end,
+  return async.await(function(cb)
+    -- Open on the next tick so popup/status teardown cannot race win enter.
+    vim.schedule(function()
+      pcall(vim.cmd, "redraw!")
+      fuzzy.open({
+        prompt = opts.prompt,
+        entries = opts.entries,
+        allow_multi = opts.allow_multi,
+        allow_free_text = opts.allow_free_text,
+        on_select = once_cb(cb),
+        on_open = function(win) ensure_picker_focus(win) end,
       })
-      :find()
-  end
-
-  if co then return async.await(run) end
-  run(function(item)
-    result = item
-    done = true
+    end)
   end)
-  vim.wait(1e9, function() return done end, 50)
-  return result
-end
-
-function M._fzf_lua(opts)
-  local result
-  local done = false
-  local async = require("jujutsu.async")
-  local co = coroutine.running()
-  local function run(cb)
-    require("fzf-lua").fzf_exec(to_strings(opts.entries or {}), {
-      prompt = (opts.prompt or "select") .. "> ",
-      actions = {
-        ["default"] = function(selected, opts_)
-          if selected and selected[1] then
-            cb(selected[1])
-          elseif opts.allow_free_text and opts_ and opts_.last_query and opts_.last_query:match("%S") then
-            cb(opts_.last_query)
-          else
-            cb(nil)
-          end
-        end,
-      },
-    })
-  end
-  if co then return async.await(run) end
-  run(function(item)
-    result = item
-    done = true
-  end)
-  vim.wait(1e9, function() return done end, 50)
-  return result
-end
-
-function M._mini_pick(opts)
-  local result
-  local done = false
-  local async = require("jujutsu.async")
-  local co = coroutine.running()
-  local function run(cb)
-    require("mini.pick").start({
-      source = {
-        items = to_strings(opts.entries or {}),
-        choose = function(item) cb(item) end,
-      },
-    })
-  end
-  if co then return async.await(run) end
-  run(function(item)
-    result = item
-    done = true
-  end)
-  vim.wait(1e9, function() return done end, 50)
-  return result
-end
-
-function M._snacks(opts)
-  local result
-  local done = false
-  local async = require("jujutsu.async")
-  local co = coroutine.running()
-  local function run(cb)
-    local items = {}
-    for i, text in ipairs(to_strings(opts.entries or {})) do
-      items[i] = { idx = i, text = text }
-    end
-    require("snacks.picker").pick(nil, {
-      title = opts.prompt or "select",
-      items = items,
-      format = "text",
-      confirm = function(picker, item)
-        picker:close()
-        if item and item.text then
-          cb(item.text)
-        elseif opts.allow_free_text then
-          local filter = picker.input and picker.input.filter and picker.input.filter.pattern
-          if type(filter) == "string" and filter:match("%S") then
-            cb(filter)
-            return
-          end
-          cb(nil)
-        else
-          cb(nil)
-        end
-      end,
-      on_close = function() cb(nil) end,
-    })
-  end
-  if co then return async.await(run) end
-  run(function(item)
-    result = item
-    done = true
-  end)
-  vim.wait(1e9, function() return done end, 50)
-  return result
 end
 
 ---@param opts? { prompt?: string, cwd?: string }

@@ -112,8 +112,19 @@ local function show_loading_block(text)
       if not timer:is_closing() then timer:close() end
     end
     vim.opt.mouse = original_mouse
-    if vim.api.nvim_win_is_valid(original_win) then vim.api.nvim_set_current_win(original_win) end
     if vim.api.nvim_win_is_valid(win) then vim.api.nvim_win_close(win, true) end
+    -- Don't yank focus back onto a stale window if a picker already opened.
+    if original_win and vim.api.nvim_win_is_valid(original_win) then
+      local cur = vim.api.nvim_get_current_win()
+      local cur_cfg = vim.api.nvim_win_is_valid(cur) and vim.api.nvim_win_get_config(cur) or {}
+      local cur_ft = ""
+      if vim.api.nvim_win_is_valid(cur) then
+        local b = vim.api.nvim_win_get_buf(cur)
+        if vim.api.nvim_buf_is_valid(b) then cur_ft = vim.bo[b].filetype or "" end
+      end
+      local picker_focused = (cur_cfg.relative and cur_cfg.relative ~= "") or cur_ft == "jujutsu-finder"
+      if not picker_focused then pcall(vim.api.nvim_set_current_win, original_win) end
+    end
   end
 end
 

@@ -266,6 +266,7 @@ function M.open(root, revset)
       })
       if name and name ~= "" then run(cli.bookmark_set.revision(c.change_id).args(name)) end
     end,
+    IssuePanel = function() require("jujutsu.issue_panel").open({ root = root }) end,
   })
 
   refresh()

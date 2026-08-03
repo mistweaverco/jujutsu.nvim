@@ -26,15 +26,14 @@ No user commands are registered. Use the Lua API (see |jujutsu-api|).
 - Neovim 0.10+
 - `jj` on PATH
 
-Optional (pick at most one per category):
+Optional (pick at most one):
 
 Diff:  diffview.nvim  or  codediff.nvim
-Pick:  telescope.nvim | fzf-lua | mini.pick | snacks.nvim
+
+Selections use the built-in fuzzy finder.
 
 Forge review (see |jujutsu-review|):
   GitHub: `gh`  |  GitLab: `glab`  |  Forgejo/Codeberg & Bitbucket: `curl` + tokens
-
-Without a picker plugin, a built-in fuzzy finder is used.
 
 ==============================================================================
 3. SETUP                                                         *jujutsu-setup*
@@ -58,11 +57,7 @@ Without a picker plugin, a built-in fuzzy finder is used.
       popup = { ["c"] = "ChangePopup" },
     },
     integrations = {
-      telescope = nil,  -- nil = auto, true/false = force
-      fzf_lua = nil,
-      mini_pick = nil,
-      snacks = nil,
-      diffview = nil,
+      diffview = nil,  -- nil = auto, true/false = force
       codediff = nil,
     },
     diff_viewer = nil,  -- "diffview" | "codediff" | nil
@@ -123,6 +118,15 @@ review({opts?})           Open a forge PR/MR review in DiffView.
     number     integer|string   PR/MR number
     cwd/root   string           workspace directory
 
+                                                     *jujutsu.issue_panel()*
+issue_panel({opts?})      Open the Issue/PR conversation side panel.
+                          Prompts for kind + number when omitted.
+
+  Options: ~
+    number     integer|string   issue or PR/MR number
+    kind       "issue"|"pr"     topic kind (default: "pr" when number set)
+    cwd/root   string           workspace directory
+
                                                           *jujutsu.action()*
 action({popup}, {action}, {args?})
                           Return a function that runs a popup action.
@@ -152,8 +156,8 @@ Diff popup: `dd` / `dr` / `dt` side-by-side diffsplit; `dc` change history;
 ==============================================================================
 6. INTEGRATIONS                                           *jujutsu-integrations*
 
-Pickers are auto-detected. Priority: telescope, fzf-lua, mini.pick, snacks,
-then the built-in finder.
+Selections (revisions, bookmarks, remotes, PRs, …) use the built-in fuzzy
+finder.
 
 Diff popup action "External viewer" uses diffview or codediff when available
 (typically requires a git-colocated jj repository).
@@ -248,8 +252,9 @@ Providers: ~
              `BITBUCKET_USER` + `BITBUCKET_TOKEN`)
 
 Credentials for Bitbucket / Forgejo are stored under
-`stdpath("data")/jujutsu/credentials.json`. Invalid credentials prompt to
-update or delete the stored entry.
+`stdpath("data")/jujutsu/credentials.json`. HTTP 401 prompts to
+update or delete stored credentials. Bitbucket approve / request-changes
+needs an Atlassian API token with `write:pullrequest:bitbucket`.
 
 Entry points: ~
 - Diff popup `dR`
@@ -257,18 +262,78 @@ Entry points: ~
 
 Review DiffView keys: ~
   c        comment at cursor line
+  a        reply to remote comment thread
   C        file comment
   v/V + c  range comment
   ;c       review-level comment
   e / i    edit unsubmitted comment at cursor
-  m / M    next / previous comment
+  x        delete unsubmitted comment at cursor
+  f        toggle all files / files with comments
+  R        refresh all remote comments (cache)
+  gr       refresh remote comments for current file
+  m / M    next / previous comment (diff moves cursor; file list scrolls only)
   r        toggle file reviewed (panel)
   y        yank structured markdown
   S        submit (Comment / Approve / Request changes; Draft = GitHub only)
+  I        open Issue/PR conversation panel
+  o        open in browser (file / PR line)
   ?        help
+
+Remote inline threads (including replies) are shown as nested overlays.
+Comments wrap to the diff window by default (`forge.review.wrap_comments`);
+set `wrap_width` for a fixed column, or `wrap_comments = false` to truncate.
+Each comment shows a metadata header (name · date) then the body on following
+lines with a fixed indent (`forge.review.comment_indent`, default 4).
+Comment bodies are treesitter-highlighted as markdown by default
+(`forge.review.render_markdown`).
+`a` posts a reply on GitHub, GitLab, Bitbucket, and Forgejo/Codeberg.
 
 Sessions are stored under `stdpath("data")/jujutsu/reviews/`.
 Bitbucket / Forgejo credentials under `stdpath("data")/jujutsu/credentials.json`.
+
+==============================================================================
+10. ISSUE / PR CONVERSATION PANEL                         *jujutsu-issue-panel*
+
+Full-height right split with issue or PR details and conversation comments.
+Inline review threads remain in the DiffView overlays.
+
+Open: ~
+- Review DiffView `I` (see `issue_panel.keymaps.open`)
+- Status / log `I` (PR on bookmark when present, else prompt)
+- |jujutsu.issue_panel()|
+
+Panel keys: ~
+  c        post a comment
+  r        refresh
+  o        open topic in browser
+  q        close
+
+In DiffView, `o` opens the file at the head commit (file list) or the
+PR/MR at the cursor line (diff buffers).
+
+Description and comment bodies are treesitter-highlighted as markdown by
+default (`issue_panel.render_markdown`); author / date headers stay plain.
+
+Config (defaults): ~
+>
+  issue_panel = {
+    enabled = true,
+    width = 0.38,
+    min_width = 48,
+    max_width = 90,
+    position = "right",
+    render_markdown = true,
+    keymaps = {
+      close = "q",
+      refresh = "r",
+      comment = "c",
+      open = "I",
+      browser = "o",
+    },
+  }
+<
+
+Providers: GitHub (`gh`), GitLab (`glab`), Bitbucket, Forgejo/Codeberg.
 
 ==============================================================================
 vim:tw=78:ts=8:ft=help:norl:

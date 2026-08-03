@@ -74,9 +74,22 @@ function M.basic_auth(user, token) return "Basic " .. vim.base64.encode(string.f
 ---@param status integer|nil
 ---@return boolean
 function M.is_auth_error(err, status)
-  if status == 401 or status == 403 then return true end
+  if status == 401 then return true end
   if type(err) ~= "string" then return false end
-  return err:match("^HTTP 401") ~= nil or err:match("^HTTP 403") ~= nil
+  if err:match("HTTP 401") then return true end
+  -- Bitbucket scoped API tokens return 403 (not 401) when write scopes are missing.
+  if err:match("HTTP 403") then
+    local lower = err:lower()
+    if
+      lower:find("privilege scopes", 1, true)
+      or lower:find("required privilege", 1, true)
+      or lower:find("write:pullrequest", 1, true)
+      or lower:find("lack one or more required", 1, true)
+    then
+      return true
+    end
+  end
+  return false
 end
 
 return M

@@ -197,40 +197,231 @@ end
 ---@return ForgeRemoteComment[]
 function M.list_review_comments(root, remote, number)
   if not M.available() then return {} end
+  local threads = require("jujutsu.review.threads")
   local data, err = api(root, remote, number, "GET", "/discussions")
   if err or type(data) ~= "table" then return {} end
   local out = {}
   for _, disc in ipairs(data) do
+    local discussion_id = disc.id and tostring(disc.id) or nil
+    local root_id = nil
+    local root_loc = nil
     for _, note in ipairs(disc.notes or {}) do
-      local pos = note.position
-      if not note.system and type(pos) == "table" then
-        local path = pos.new_path or pos.old_path
-        local line, side
-        if pos.new_line and pos.new_line ~= vim.NIL then
-          line = pos.new_line
-          side = "RIGHT"
-        elseif pos.old_line and pos.old_line ~= vim.NIL then
-          line = pos.old_line
-          side = "LEFT"
+      if not note.system then
+        local path, line, side
+        local pos = note.position
+        if type(pos) == "table" then
+          path = pos.new_path or pos.old_path
+          if pos.new_line and pos.new_line ~= vim.NIL then
+            line = pos.new_line
+            side = "RIGHT"
+          elseif pos.old_line and pos.old_line ~= vim.NIL then
+            line = pos.old_line
+            side = "LEFT"
+          end
+        end
+        if (not path or not line) and root_loc then
+          path = path or root_loc.path
+          line = line or root_loc.line
+          side = side or root_loc.side
         end
         if path and line then
+          local id = threads.remote_id(note.id)
+          local parent_id = root_id
+          if not root_id then
+            root_id = id
+            root_loc = { path = path, line = line, side = side }
+            parent_id = nil
+          end
           table.insert(out, {
-            id = "remote-" .. tostring(note.id),
+            id = id,
             path = path,
             side = side,
             line = tonumber(line) or line,
             body = note.body or "",
             author = (note.author and (note.author.username or note.author.name)) or "unknown",
-            outdated = pos.outdated == true,
+            outdated = type(pos) == "table" and pos.outdated == true,
             url = note.web_url,
             remote = true,
             kind = "line",
+            parent_id = parent_id,
+            discussion_id = discussion_id,
+            provider = "gitlab",
+            created_at = note.created_at,
+            updated_at = note.updated_at,
+            supports_reply = discussion_id ~= nil,
           })
         end
       end
     end
   end
   return out
+end
+
+---@param root string
+---@param remote { owner: string, repo: string }
+---@param resource "merge_requests"|"issues"
+---@param number integer|string
+---@param method string
+---@param path string
+---@param body? table
+---@return table|nil, string|nil
+local function resource_api(root, remote, resource, number, method, path, body)
+  local project = urlencode_path(remote.owner .. "/" .. remote.repo)
+  local endpoint = string.format("projects/%s/%s/%s%s", project, resource, tostring(number), path)
+  local args = { "api", "--method", method, endpoint }
+  local input = nil
+  if body then
+    table.insert(args, "--input")
+    table.insert(args, "-")
+    input = vim.json.encode(body)
+  end
+  local res = run(root, args, input)
+  if res.code ~= 0 then return nil, res.stderr ~= "" and res.stderr or res.stdout end
+  if res.stdout == "" then return {}, nil end
+  local ok, data = pcall(vim.json.decode, res.stdout)
+  if ok then return data end
+  return {}, nil
+end
+
+---@param labels any
+---@return string[]
+local function map_labels(labels)
+  local out = {}
+  if type(labels) ~= "table" then return out end
+  for _, l in ipairs(labels) do
+    if type(l) == "string" then
+      table.insert(out, l)
+    elseif type(l) == "table" then
+      table.insert(out, l.name or l.title or "?")
+    end
+  end
+  return out
+end
+
+---@param users any
+---@return string[]
+local function map_users(users)
+  local out = {}
+  if type(users) ~= "table" then return out end
+  for _, u in ipairs(users) do
+    if type(u) == "table" then table.insert(out, u.username or u.name or "?") end
+  end
+  return out
+end
+
+---@param root string
+---@param remote { owner: string, repo: string }
+---@param number integer|string
+---@param opts? { kind?: "issue"|"pr" }
+---@return ForgeTopic|nil, string|nil
+function M.get_topic(root, remote, number, opts)
+  if not M.available() then return nil, "glab is not on PATH" end
+  opts = opts or {}
+  local kind = opts.kind or "pr"
+  if kind == "issue" then
+    local issue, err = resource_api(root, remote, "issues", number, "GET", "")
+    if err or type(issue) ~= "table" then return nil, err or "failed to fetch issue" end
+    return {
+      kind = "issue",
+      number = issue.iid or number,
+      title = issue.title or "",
+      body = issue.description or "",
+      state = issue.state or "opened",
+      author = (issue.author and (issue.author.username or issue.author.name)) or "unknown",
+      created_at = issue.created_at,
+      updated_at = issue.updated_at,
+      labels = map_labels(issue.labels),
+      assignees = map_users(issue.assignees),
+      url = issue.web_url or "",
+      repo = remote.owner .. "/" .. remote.repo,
+    }
+  end
+
+  local mr, err = resource_api(root, remote, "merge_requests", number, "GET", "")
+  if err or type(mr) ~= "table" then return nil, err or "failed to fetch MR" end
+  local state = mr.state or "opened"
+  if type(mr.merged_at) == "string" and mr.merged_at ~= "" then state = "merged" end
+  if mr.draft or mr.work_in_progress then state = "draft" end
+  return {
+    kind = "pr",
+    number = mr.iid or number,
+    title = mr.title or "",
+    body = mr.description or "",
+    state = state,
+    draft = mr.draft == true or mr.work_in_progress == true,
+    merged = type(mr.merged_at) == "string" and mr.merged_at ~= "",
+    author = (mr.author and (mr.author.username or mr.author.name)) or "unknown",
+    created_at = mr.created_at,
+    updated_at = mr.updated_at,
+    labels = map_labels(mr.labels),
+    assignees = map_users(mr.assignees),
+    url = mr.web_url or "",
+    repo = remote.owner .. "/" .. remote.repo,
+  }
+end
+
+---@param root string
+---@param remote { owner: string, repo: string }
+---@param number integer|string
+---@param opts? { kind?: "issue"|"pr" }
+---@return ForgeConversationComment[], string|nil
+function M.list_comments(root, remote, number, opts)
+  if not M.available() then return {}, "glab is not on PATH" end
+  opts = opts or {}
+  local resource = (opts.kind == "issue") and "issues" or "merge_requests"
+  local data, err = resource_api(root, remote, resource, number, "GET", "/notes?sort=asc&per_page=100")
+  if err then return {}, err end
+  if type(data) ~= "table" then return {}, nil end
+  local out = {}
+  for _, note in ipairs(data) do
+    if not note.system and not note.position then
+      table.insert(out, {
+        id = tostring(note.id),
+        author = (note.author and (note.author.username or note.author.name)) or "unknown",
+        created_at = note.created_at,
+        updated_at = note.updated_at,
+        body = note.body or "",
+        url = note.web_url,
+        kind = "comment",
+      })
+    end
+  end
+  return out, nil
+end
+
+---@param root string
+---@param remote { owner: string, repo: string }
+---@param number integer|string
+---@param body string
+---@param opts? { kind?: "issue"|"pr" }
+---@return boolean, string|nil
+function M.post_comment(root, remote, number, body, opts)
+  if not M.available() then return false, "glab is not on PATH" end
+  if not body or vim.trim(body) == "" then return false, "Empty comment" end
+  opts = opts or {}
+  local resource = (opts.kind == "issue") and "issues" or "merge_requests"
+  local _, err = resource_api(root, remote, resource, number, "POST", "/notes", { body = body })
+  if err then return false, err end
+  return true
+end
+
+---Reply inside an MR discussion thread.
+---@param root string
+---@param remote { owner: string, repo: string }
+---@param number integer|string
+---@param opts { discussion_id: string, body: string, parent_id?: string|integer }
+---@return boolean, string|nil
+function M.post_reply(root, remote, number, opts)
+  if not M.available() then return false, "glab is not on PATH" end
+  opts = opts or {}
+  local body = opts.body
+  if not body or vim.trim(body) == "" then return false, "Empty comment" end
+  local discussion_id = opts.discussion_id
+  if not discussion_id or discussion_id == "" then return false, "Missing discussion id" end
+  local _, err =
+    api(root, remote, number, "POST", string.format("/discussions/%s/notes", tostring(discussion_id)), { body = body })
+  if err then return false, err end
+  return true
 end
 
 return M

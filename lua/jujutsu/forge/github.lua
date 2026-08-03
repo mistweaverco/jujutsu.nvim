@@ -224,6 +224,12 @@ end
 ---@field outdated? boolean
 ---@field url? string
 ---@field remote true
+---@field parent_id? string
+---@field discussion_id? string
+---@field provider? string
+---@field created_at? string
+---@field updated_at? string
+---@field supports_reply? boolean
 
 ---@param root string
 ---@param remote { owner: string, repo: string }
@@ -231,6 +237,7 @@ end
 ---@return ForgeRemoteComment[]
 function M.list_review_comments(root, remote, number)
   if not M.available() then return {} end
+  local threads = require("jujutsu.review.threads")
   local endpoint = string.format("repos/%s/%s/pulls/%s/comments", remote.owner, remote.repo, tostring(number))
   -- Request a high per_page
   -- paginate merges pages. Use Accept for the reviews API.
@@ -266,11 +273,13 @@ function M.list_review_comments(root, remote, number)
   for _, c in ipairs(data) do
     local line = c.line or c.original_line
     local path = c.path
+    local parent_id = nil
+    if c.in_reply_to_id then parent_id = threads.remote_id(c.in_reply_to_id) end
     if path and line then
       local side = c.side or "RIGHT"
       if side ~= "LEFT" and side ~= "RIGHT" then side = "RIGHT" end
       table.insert(out, {
-        id = "remote-" .. tostring(c.id),
+        id = threads.remote_id(c.id),
         path = path,
         side = side,
         line = tonumber(line) or line,
@@ -281,10 +290,247 @@ function M.list_review_comments(root, remote, number)
         url = c.html_url,
         remote = true,
         kind = "line",
+        parent_id = parent_id,
+        provider = "github",
+        created_at = c.created_at,
+        updated_at = c.updated_at,
+        supports_reply = true,
+      })
+    elseif parent_id then
+      -- Reply missing line: keep for inherit, then drop if still unresolved.
+      table.insert(out, {
+        id = threads.remote_id(c.id),
+        path = path,
+        side = c.side or "RIGHT",
+        line = line and (tonumber(line) or line) or nil,
+        body = c.body or "",
+        author = (c.user and (c.user.login or c.user.name)) or "unknown",
+        outdated = true,
+        url = c.html_url,
+        remote = true,
+        kind = "line",
+        parent_id = parent_id,
+        provider = "github",
+        created_at = c.created_at,
+        updated_at = c.updated_at,
+        supports_reply = true,
       })
     end
   end
+  threads.inherit_locations(out)
+  local filtered = {}
+  for _, c in ipairs(out) do
+    if c.path and c.line then table.insert(filtered, c) end
+  end
+  return filtered
+end
+
+---@param root string
+---@param _ { owner: string, repo: string }
+---@param path string
+---@param method? string
+---@param body? table
+---@return table|nil, string|nil
+local function api_json(root, _, path, method, body)
+  local args = { "api", "-H", "Accept: application/vnd.github+json" }
+  if method and method ~= "GET" then
+    table.insert(args, "-X")
+    table.insert(args, method)
+  end
+  if method == "GET" or not method then table.insert(args, "--paginate") end
+  table.insert(args, path)
+  local obj
+  if body then
+    obj = vim
+      .system(vim.list_extend({ "gh" }, vim.list_extend(args, { "--input", "-" })), {
+        cwd = root,
+        text = true,
+        stdin = vim.json.encode(body),
+      })
+      :wait()
+  else
+    obj = vim.system(vim.list_extend({ "gh" }, args), { cwd = root, text = true }):wait()
+  end
+  if obj.code ~= 0 then return nil, format_api_error(obj.stdout or "", obj.stderr or "") end
+  local raw = vim.trim(obj.stdout or "")
+  if raw == "" then return {}, nil end
+  local ok, decoded = pcall(vim.json.decode, raw)
+  if ok and type(decoded) == "table" then return decoded, nil end
+  -- paginated arrays
+  local glued = raw:gsub("%]%s*%[", ",")
+  if not glued:match("^%[") then glued = "[" .. glued .. "]" end
+  local ook, arr = pcall(vim.json.decode, glued)
+  if ook and type(arr) == "table" then return arr, nil end
+  return nil, "invalid JSON from gh api"
+end
+
+---@param labels any
+---@return string[]
+local function map_labels(labels)
+  local out = {}
+  if type(labels) ~= "table" then return out end
+  for _, l in ipairs(labels) do
+    if type(l) == "string" then
+      table.insert(out, l)
+    elseif type(l) == "table" and l.name then
+      table.insert(out, l.name)
+    end
+  end
   return out
+end
+
+---@param users any
+---@return string[]
+local function map_users(users)
+  local out = {}
+  if type(users) ~= "table" then return out end
+  for _, u in ipairs(users) do
+    if type(u) == "table" then table.insert(out, u.login or u.name or tostring(u.id or "?")) end
+  end
+  return out
+end
+
+---@param root string
+---@param remote { owner: string, repo: string }
+---@param number integer|string
+---@param opts? { kind?: "issue"|"pr" }
+---@return ForgeTopic|nil, string|nil
+function M.get_topic(root, remote, number, opts)
+  if not M.available() then return nil, "gh is not on PATH" end
+  opts = opts or {}
+  local kind = opts.kind or "issue"
+  local issue_path = string.format("repos/%s/%s/issues/%s", remote.owner, remote.repo, tostring(number))
+  local issue, err = api_json(root, remote, issue_path)
+  if err or type(issue) ~= "table" then return nil, err or "failed to fetch issue" end
+
+  local state = issue.state or "open"
+  local draft, merged = false, false
+  local is_pr = (issue.pull_request ~= nil and issue.pull_request ~= vim.NIL) or kind == "pr"
+  if is_pr then
+    kind = "pr"
+    local pr_path = string.format("repos/%s/%s/pulls/%s", remote.owner, remote.repo, tostring(number))
+    local pr = select(1, api_json(root, remote, pr_path))
+    if type(pr) == "table" then
+      draft = pr.draft == true
+      -- JSON null decodes as vim.NIL (truthy); only a real string timestamp means merged.
+      merged = pr.merged == true or (type(pr.merged_at) == "string" and pr.merged_at ~= "")
+      if merged then
+        state = "merged"
+      elseif draft and (pr.state == "open" or not pr.state) then
+        state = "draft"
+      else
+        state = pr.state or state
+      end
+    end
+  else
+    kind = "issue"
+  end
+
+  return {
+    kind = kind,
+    number = issue.number or tonumber(number) or number,
+    title = issue.title or "",
+    body = issue.body or "",
+    state = state,
+    draft = draft,
+    merged = merged,
+    author = (issue.user and (issue.user.login or issue.user.name)) or "unknown",
+    created_at = issue.created_at,
+    updated_at = issue.updated_at,
+    labels = map_labels(issue.labels),
+    assignees = map_users(issue.assignees),
+    url = issue.html_url or "",
+    repo = remote.owner .. "/" .. remote.repo,
+  }
+end
+
+---@param root string
+---@param remote { owner: string, repo: string }
+---@param number integer|string
+---@param opts? { kind?: "issue"|"pr" }
+---@return ForgeConversationComment[], string|nil
+function M.list_comments(root, remote, number, opts)
+  if not M.available() then return {}, "gh is not on PATH" end
+  opts = opts or {}
+  local path = string.format("repos/%s/%s/issues/%s/comments?per_page=100", remote.owner, remote.repo, tostring(number))
+  local data, err = api_json(root, remote, path)
+  if err then return {}, err end
+  if type(data) ~= "table" then return {}, nil end
+  if data[1] == nil and data.id then data = { data } end
+
+  local out = {}
+  for _, c in ipairs(data) do
+    table.insert(out, {
+      id = tostring(c.id),
+      author = (c.user and (c.user.login or c.user.name)) or "unknown",
+      author_association = c.author_association,
+      created_at = c.created_at,
+      updated_at = c.updated_at,
+      body = c.body or "",
+      url = c.html_url,
+      kind = "comment",
+    })
+  end
+
+  if (opts.kind or "issue") == "pr" then
+    local reviews_path =
+      string.format("repos/%s/%s/pulls/%s/reviews?per_page=100", remote.owner, remote.repo, tostring(number))
+    local reviews = select(1, api_json(root, remote, reviews_path))
+    if type(reviews) == "table" then
+      for _, r in ipairs(reviews) do
+        local body = r.body or ""
+        if body ~= "" then
+          table.insert(out, {
+            id = "review-" .. tostring(r.id),
+            author = (r.user and (r.user.login or r.user.name)) or "unknown",
+            author_association = r.author_association,
+            created_at = r.submitted_at or r.created_at,
+            body = body,
+            url = r.html_url,
+            kind = "review",
+          })
+        end
+      end
+    end
+  end
+
+  table.sort(out, function(a, b) return tostring(a.created_at or "") < tostring(b.created_at or "") end)
+  return out, nil
+end
+
+---@param root string
+---@param remote { owner: string, repo: string }
+---@param number integer|string
+---@param body string
+---@param _opts? { kind?: "issue"|"pr" }
+---@return boolean, string|nil
+function M.post_comment(root, remote, number, body, _opts)
+  if not M.available() then return false, "gh is not on PATH" end
+  if not body or vim.trim(body) == "" then return false, "Empty comment" end
+  local path = string.format("repos/%s/%s/issues/%s/comments", remote.owner, remote.repo, tostring(number))
+  local _, err = api_json(root, remote, path, "POST", { body = body })
+  if err then return false, err end
+  return true
+end
+
+---Reply to an inline PR review comment (`in_reply_to`).
+---@param root string
+---@param remote { owner: string, repo: string }
+---@param number integer|string
+---@param opts { parent_id: string|integer, body: string }
+---@return boolean, string|nil
+function M.post_reply(root, remote, number, opts)
+  if not M.available() then return false, "gh is not on PATH" end
+  opts = opts or {}
+  local body = opts.body
+  if not body or vim.trim(body) == "" then return false, "Empty comment" end
+  local threads = require("jujutsu.review.threads")
+  local parent = tonumber(threads.raw_id(opts.parent_id))
+  if not parent then return false, "Missing parent comment id" end
+  local path = string.format("repos/%s/%s/pulls/%s/comments", remote.owner, remote.repo, tostring(number))
+  local _, err = api_json(root, remote, path, "POST", { body = body, in_reply_to = parent })
+  if err then return false, err end
+  return true
 end
 
 return M

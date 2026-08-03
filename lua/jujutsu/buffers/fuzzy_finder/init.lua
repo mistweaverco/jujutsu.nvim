@@ -26,6 +26,7 @@ end
 ---@field allow_multi? boolean
 ---@field allow_free_text? boolean
 ---@field on_select fun(item: string|string[]|nil)
+---@field on_open? fun(win: integer, bufnr: integer)
 
 ---@param opts FuzzyFinderOpts
 function M.open(opts)
@@ -59,9 +60,12 @@ function M.open(opts)
     border = "rounded",
     title = " " .. prompt .. " ",
     title_pos = "left",
+    focusable = true,
+    zindex = 200,
   })
   vim.wo[win].cursorline = true
   vim.wo[win].number = false
+  if type(opts.on_open) == "function" then opts.on_open(win, bufnr) end
 
   local function close(result)
     if closed then return end
@@ -193,6 +197,18 @@ function M.open(opts)
   end
 
   redraw()
+  -- Closing another UI (e.g. Diff popup) before open can leave focus elsewhere.
+  local function reclaim()
+    if closed then return end
+    if vim.api.nvim_win_is_valid(win) and vim.api.nvim_get_current_win() ~= win then
+      pcall(vim.api.nvim_set_current_win, win)
+      pcall(vim.cmd, "redraw")
+    end
+  end
+  reclaim()
+  for _, delay in ipairs({ 10, 30, 60, 100, 180, 300, 500, 800, 1200 }) do
+    vim.defer_fn(reclaim, delay)
+  end
 end
 
 ---@param opts { prompt?: string, entries: any[], allow_multi?: boolean, allow_free_text?: boolean }

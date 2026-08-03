@@ -27,21 +27,14 @@ See [`CHANGELOG.md`](CHANGELOG.md) for a full list of changes.
 
 **No required Neovim plugins.** Optional:
 
-The build-in diff viewer should work perfectly fine,
+The built-in diff viewer should work perfectly fine,
 but if you absolutely must, you can install one of the following diff viewers and
 pick it in the setup:
 
--  [`diffview.nvim`](https://github.com/sindrets/diffview.nvim) or
+- [`diffview.nvim`](https://github.com/sindrets/diffview.nvim) or
 - [`codediff.nvim`](https://github.com/esmuellert/codediff.nvim)
 
-You can use one of the following fuzzy finders for
-the file history and change history popups.
-If none are installed, the built-in picker will be used.
-
-- `Telescope`
-- `fzf-lua`
-- `mini.pick`
-- `snacks.nvim`
+Selections (revisions, bookmarks, PRs, …) use the built-in fuzzy finder.
 
 ## Installation (`lazy.nvim`)
 
@@ -50,7 +43,7 @@ If none are installed, the built-in picker will be used.
   "mistweaverco/jujutsu.nvim",
   lazy = true,
   -- optional deps:
-  -- dependencies = { "sindrets/diffview.nvim", "ibhagwan/fzf-lua" },
+  -- dependencies = { "sindrets/diffview.nvim" },
   keys = {
     {
       "<leader>gg",
@@ -87,10 +80,6 @@ jj.setup({
   },
   integrations = {
     -- nil = auto-detect, true = force, false = disable
-    telescope = nil,
-    fzf_lua = nil,
-    mini_pick = nil,
-    snacks = nil,
     diffview = nil,
     codediff = nil,
   },
@@ -122,11 +111,14 @@ jj.annotate()                          -- annotate current buffer at cursor line
 jj.annotate({ path = "src/main.lua", line = 10 })
 jj.review()                            -- pick an open PR/MR and review it
 jj.review({ number = 15 })             -- open a specific PR/MR
+jj.issue_panel()                       -- conversation panel (prompt for kind + number)
+jj.issue_panel({ number = 12, kind = "issue" })
 
 -- Bindable action for your own keymaps:
 vim.keymap.set("n", "<leader>jc", jj.action("change", "commit"))
 vim.keymap.set("n", "<leader>jb", jj.annotate)
 vim.keymap.set("n", "<leader>jr", jj.review)
+vim.keymap.set("n", "<leader>ji", jj.issue_panel)
 ```
 
 ### Popup Names
@@ -176,9 +168,9 @@ you submit or yank markdown.
 | GitHub | `gh` | `gh auth login` |
 | GitLab | `glab` | `glab auth login` |
 | Codeberg / Forgejo | `curl` REST | Prompted per host and stored under `stdpath("data")/jujutsu/credentials.json`, or `FORGEJO_TOKEN` / `CODEBERG_TOKEN` / `forge.forgejo.token` |
-| Bitbucket Cloud | `curl` REST | Prompted per workspace (username + token) and stored in the same file, or `BITBUCKET_USER` + `BITBUCKET_TOKEN` / `forge.bitbucket.*` |
+| Bitbucket Cloud | `curl` REST | Prompted per workspace (**Atlassian email** + API token) and stored in the same file, or `BITBUCKET_USER` + `BITBUCKET_TOKEN` / `forge.bitbucket.*`. Token needs `read:pullrequest:bitbucket` to browse; **`write:pullrequest:bitbucket`** for approve / request-changes. |
 
-On HTTP 401/403, review asks whether to supply new credentials or delete the stored ones.
+On HTTP 401, review asks whether to supply new credentials or delete the stored ones.
 
 **Entry points**
 
@@ -190,14 +182,21 @@ On HTTP 401/403, review asks whether to supply new credentials or delete the sto
 | Key | Action |
 |-----|--------|
 | `c` | Comment at cursor line |
+| `a` | Reply to remote comment thread on this line |
 | `C` | File comment |
 | visual `c` | Range comment |
 | `;c` | Review-level comment |
 | `e` / `i` | Edit unsubmitted comment at cursor |
-| `m` / `M` | Next / previous comment |
+| `x` | Delete unsubmitted comment at cursor |
+| `f` | Toggle all files / files with comments |
+| `R` | Refresh all remote comments (in-memory cache) |
+| `gr` | Refresh remote comments for the current file |
+| `m` / `M` | Next / previous comment (in diff: move cursor; in file list: scroll diff, keep panel focus) |
 | `r` | Toggle file reviewed (panel) |
 | `y` | Yank structured markdown |
 | `S` | Submit (Comment / Approve / Request changes; Draft on GitHub only) |
+| `I` | Open Issue/PR conversation side panel |
+| `o` | Open in browser (file at commit / PR line / conversation URL) |
 | `?` | Help |
 
 Sessions persist under `stdpath("data")/jujutsu/reviews/`. Bitbucket / Forgejo credentials persist under `stdpath("data")/jujutsu/credentials.json`.
@@ -205,12 +204,49 @@ Sessions persist under `stdpath("data")/jujutsu/reviews/`. Bitbucket / Forgejo c
 ```lua
 forge = {
   pr_integration = true,
-  review = { enabled = true },
+  review = {
+    enabled = true,
+    wrap_comments = true, -- wrap virt_line comments to the diff window
+    wrap_width = nil, -- optional fixed column; nil = fit window
+    render_markdown = true, -- treesitter-highlight virt_line comment bodies
+    comment_indent = 4, -- fixed spaces before body lines (header is separate)
+    keymaps = {
+      filter = "f", -- all files <-> files with comments
+      refresh_comments = "R", -- refresh full remote comment cache
+      refresh_file_comments = "gr", -- refresh cache + overlays for current file
+      reply = "a", -- reply to a remote inline comment thread
+    },
+  },
   bitbucket = { user = vim.env.BITBUCKET_USER, token = vim.env.BITBUCKET_TOKEN },
   forgejo = { token = vim.env.CODEBERG_TOKEN },
   hosts = {}, -- e.g. ["git.example.com"] = "gitlab"
 },
+issue_panel = {
+  enabled = true,
+  width = 0.38,
+  min_width = 48,
+  max_width = 90,
+  position = "right",
+  render_markdown = true, -- treesitter-highlight description/comment bodies
+  keymaps = { close = "q", refresh = "r", comment = "c", open = "I", browser = "o" },
+},
 ```
+
+## Issue / PR conversation panel
+
+Full-height right split showing the selected issue or pull request with its conversation (description + chronological comments). Description and comment bodies are highlighted as markdown by default (all forges); author/date headers stay plain. Inline review threads (including nested replies) stay in the DiffView overlays; press `a` on a commented line to reply.
+
+**Open from**
+
+- Review DiffView: `I` (configurable via `issue_panel.keymaps.open`)
+- Status / log: `I` - uses the PR number on a PR-annotated bookmark when present, otherwise prompts for kind + number
+- API: `require("jujutsu").issue_panel()` / `.issue_panel({ number = 12, kind = "issue" })`
+
+**Panel keys:** `c` comment · `r` refresh · `o` open in browser · `q` close
+
+Works on GitHub (`gh`), GitLab (`glab`), Bitbucket, and Forgejo/Codeberg.
+
+In DiffView, `o` is context-aware: file list opens the file at the PR head commit; the side-by-side diff opens the file in the PR at the cursor line.
 
 ## Status Buffer
 

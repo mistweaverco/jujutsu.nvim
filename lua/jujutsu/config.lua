@@ -91,12 +91,8 @@ local defaults = {
     changedelete = { text = "~" },
   },
   integrations = {
-    telescope = nil,
     diffview = nil,
     codediff = nil,
-    fzf_lua = nil,
-    mini_pick = nil,
-    snacks = nil,
     juu = nil,
   },
   diff_viewer = nil,
@@ -104,10 +100,43 @@ local defaults = {
     pr_integration = true,
     review = {
       enabled = true,
+      -- Wrap remote/local comment virt_lines to the diff window width (or wrap_width).
+      wrap_comments = true,
+      -- Optional fixed wrap column; nil = fit the current diff window.
+      wrap_width = nil,
+      -- Highlight comment bodies as markdown via a hidden treesitter buffer.
+      -- Headers (name / date) stay plain. Falls back to solid review HL if TS is unavailable.
+      render_markdown = true,
+      -- Fixed leading spaces for each body virt_line (not padded to the header width).
+      comment_indent = 4,
+      keymaps = {
+        filter = "f",
+        refresh_comments = "R",
+        refresh_file_comments = "gr",
+        reply = "a",
+      },
     },
     bitbucket = { user = nil, token = nil },
     forgejo = { token = nil },
     hosts = {},
+  },
+  issue_panel = {
+    enabled = true,
+    width = 0.38,
+    min_width = 48,
+    max_width = 90,
+    position = "right",
+    -- Highlight description / comment bodies as markdown (treesitter). Author
+    -- and date headers stay plain JujutsuIssue* chrome. Set false for the
+    -- lightweight line-heuristic highlighter instead.
+    render_markdown = true,
+    keymaps = {
+      close = "q",
+      refresh = "r",
+      comment = "c",
+      open = "I",
+      browser = "o",
+    },
   },
   sections = {
     files = { folded = false, hidden = false },
@@ -184,6 +213,7 @@ local defaults = {
       ["P"] = "Split",
       ["S"] = "OpenStat",
       ["o"] = "OpenBrowser",
+      ["I"] = "IssuePanel",
       ["{"] = "GoToPreviousHunkHeader",
       ["}"] = "GoToNextHunkHeader",
       ["<c-n>"] = "NextSection",
@@ -199,6 +229,7 @@ local defaults = {
       ["P"] = "Split",
       ["x"] = "Abandon",
       ["b"] = "SetBookmark",
+      ["I"] = "IssuePanel",
       ["<c-r>"] = "RefreshBuffer",
     },
     commit_view = {
@@ -248,10 +279,6 @@ function M.check_integration(name)
   if val == true then return true end
   -- auto-detect
   local modules = {
-    telescope = "telescope",
-    fzf_lua = "fzf-lua",
-    mini_pick = "mini.pick",
-    snacks = "snacks",
     diffview = "diffview",
     codediff = "codediff",
     juu = "juu.progress",

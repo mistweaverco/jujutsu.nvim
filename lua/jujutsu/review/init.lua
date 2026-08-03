@@ -44,8 +44,8 @@ local function open_session(root, pr, rem)
   })
 
   notify.info("Loading existing review comments…")
-  session.remote_comments = provider.list_review_comments(root, pr.number, rem)
-  if #session.remote_comments > 0 then
+  session_mod.refresh_remote_comments(session)
+  if #(session.remote_comments or {}) > 0 then
     notify.info(string.format("Loaded %d remote comment(s)", #session.remote_comments))
   end
 
@@ -59,10 +59,12 @@ local function open_session(root, pr, rem)
   })
 end
 
----Run review continuation inside a coroutine so finder.pick can await
+---Run review continuation inside a fresh coroutine so finder.pick can await
 ---instead of vim.wait (which freezes picker input / redraw).
 ---@param fn function
 local function run_async(fn)
+  -- Always schedule a new void - never nest inside an outer coroutine that may
+  -- already have yielded (popup close / sleep) or be about to finish.
   vim.schedule(function() async.void(fn) end)
 end
 
@@ -73,6 +75,18 @@ local function continue_open(root, rem, opts)
   local function start(pr)
     if not pr then return end
     open_session(root, pr, rem)
+    -- Ensure DiffView keeps focus after any deferred UI cleanup.
+    vim.defer_fn(function()
+      local view = DiffBuffer.instance and DiffBuffer.instance()
+      if view and DiffBuffer.is_open and DiffBuffer.is_open() then
+        if view.tabpage and vim.api.nvim_tabpage_is_valid(view.tabpage) then
+          pcall(vim.api.nvim_set_current_tabpage, view.tabpage)
+        end
+        if view.panel_win and vim.api.nvim_win_is_valid(view.panel_win) then
+          pcall(vim.api.nvim_set_current_win, view.panel_win)
+        end
+      end
+    end, 50)
   end
 
   local function on_auth_err(err, retry)
@@ -117,6 +131,10 @@ local function continue_open(root, rem, opts)
         pr = pr,
       })
     end
+
+    -- Popup close + auth schedule can leave focus on status; settle UI before pick.
+    pcall(vim.cmd, "redraw!")
+    if coroutine.running() then async.sleep(50) end
 
     local selected = finder.pick({
       prompt = "Review PR/MR",
@@ -176,7 +194,8 @@ function M.open(opts)
     end
     provider.ensure_auth(rem, function(ok)
       if not ok then return end
-      proceed()
+      -- Auth UI (or sync ensure) may leave us outside a picker-capable coroutine.
+      run_async(function() continue_open(root, rem, opts) end)
     end)
     return
   end

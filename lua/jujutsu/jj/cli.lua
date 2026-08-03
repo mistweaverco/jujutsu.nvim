@@ -190,7 +190,9 @@ mt_builder.__index = function(tbl, action)
   elseif action == "files" or action == "paths" then
     return function(...)
       for _, v in ipairs({ ... }) do
-        table.insert(state.files, tostring(v))
+        -- Always wrap concrete paths as root-file:"…" so ()[]*? stay literal.
+        -- Explicit fileset expressions (file:, glob:, …) are passed through unchanged.
+        table.insert(state.files, util.fileset_literal(tostring(v)))
       end
       return tbl
     end

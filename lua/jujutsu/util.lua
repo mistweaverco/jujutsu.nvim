@@ -100,4 +100,52 @@ function M.command_label(cmd)
   return "Running…"
 end
 
+---Escape a path for a jj double-quoted string literal.
+---@param path string
+---@return string
+local function escape_jj_string(path) return (tostring(path):gsub("\\", "\\\\"):gsub('"', '\\"')) end
+
+---Convert a repo-relative path into a jj fileset that matches that exact file.
+---Bare paths are filesets (`prefix-glob`); characters like `()[]*?` change meaning
+---(e.g. SvelteKit `[uuid]` / `(group)` routes), so callers must quote them.
+---@param path string
+---@return string
+function M.fileset_literal(path)
+  path = tostring(path or "")
+  if path == "" then return 'root-file:""' end
+  -- Leave explicit fileset expressions alone (file:, glob:, root-file:, …).
+  local prefix = path:match("^([%w_+-]+):")
+  if
+    prefix
+    and (
+      prefix == "file"
+      or prefix == "cwd-file"
+      or prefix == "glob"
+      or prefix == "cwd-glob"
+      or prefix == "prefix-glob"
+      or prefix == "cwd-prefix-glob"
+      or prefix == "root"
+      or prefix == "root-file"
+      or prefix == "root-glob"
+      or prefix == "root-prefix-glob"
+      or prefix == "cwd"
+      or prefix:match("%-i$")
+    )
+  then
+    return path
+  end
+  if path:sub(1, 1) == '"' or path:sub(1, 1) == "'" then return path end
+  return string.format('root-file:"%s"', escape_jj_string(path))
+end
+
+---Make a path safe to embed in a `jujutsu://…` buffer name (`+`, `#`, `()`, …).
+---@param path string
+---@return string
+function M.buf_name_path(path)
+  path = tostring(path or "")
+  -- Keep `/` so names stay readable; encode everything else that confuses
+  -- Neovim buffer naming (`+cmd`, `#`, spaces, brackets, …).
+  return (path:gsub("([^%w%-%._~/])", function(c) return string.format("%%%02X", string.byte(c)) end))
+end
+
 return M

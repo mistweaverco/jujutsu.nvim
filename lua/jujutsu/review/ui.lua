@@ -12,13 +12,19 @@ function M.prompt_comment(title, opts, on_done)
   end
   opts = opts or {}
   local initial = opts.initial or ""
+  local origin_win = vim.api.nvim_get_current_win()
 
   local buf = vim.api.nvim_create_buf(false, true)
+  -- acwrite so :w triggers BufWriteCmd; hide (not wipe) so float teardown cannot
+  -- cascade into DiffView splits. Avoid plain "markdown" filetype - preview
+  -- plugins often open a split on FileType and collapse the review layout.
   vim.bo[buf].buftype = "acwrite"
-  vim.bo[buf].bufhidden = "wipe"
-  vim.bo[buf].filetype = "markdown"
+  vim.bo[buf].bufhidden = "hide"
   vim.bo[buf].modifiable = true
-  pcall(vim.api.nvim_buf_set_name, buf, "jujutsu://review-comment")
+  vim.bo[buf].swapfile = false
+  pcall(vim.api.nvim_buf_set_name, buf, string.format("jujutsu://review-comment/%d", buf))
+  vim.bo[buf].filetype = "jujutsu-review-comment"
+  pcall(vim.treesitter.start, buf, "markdown")
 
   local body_lines = initial ~= "" and vim.split(initial, "\n", { plain = true }) or { "" }
   local lines = vim.list_extend(vim.deepcopy(body_lines), {
@@ -39,25 +45,15 @@ function M.prompt_comment(title, opts, on_done)
     border = "rounded",
     title = " " .. title .. " ",
     title_pos = "center",
+    zindex = 100,
   })
   vim.api.nvim_win_set_cursor(win, { 1, 0 })
   vim.cmd("startinsert")
 
   local done = false
 
-  local function close()
-    if vim.api.nvim_win_is_valid(win) then pcall(vim.api.nvim_win_close, win, true) end
-    if vim.api.nvim_buf_is_valid(buf) then pcall(vim.api.nvim_buf_delete, buf, { force = true }) end
-  end
-
-  local function finish(body)
-    if done then return end
-    done = true
-    close()
-    on_done(body)
-  end
-
   local function get_body()
+    if not vim.api.nvim_buf_is_valid(buf) then return "" end
     local all = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
     local body_acc = {}
     for _, line in ipairs(all) do
@@ -69,24 +65,43 @@ function M.prompt_comment(title, opts, on_done)
     return table.concat(body_acc, "\n"):gsub("^%s+", ""):gsub("%s+$", "")
   end
 
+  local function cleanup_and_finish(body)
+    if done then return end
+    done = true
+    -- Never destroy the float/buffer inside BufWriteCmd's call stack - that can
+    -- close an underlying DiffView split. Defer cleanup + callback.
+    vim.schedule(function()
+      pcall(vim.cmd, "stopinsert")
+      if vim.api.nvim_win_is_valid(win) then pcall(vim.api.nvim_win_close, win, true) end
+      if vim.api.nvim_buf_is_valid(buf) then
+        vim.bo[buf].modified = false
+        pcall(vim.api.nvim_buf_delete, buf, { force = true })
+      end
+      if origin_win and vim.api.nvim_win_is_valid(origin_win) then pcall(vim.api.nvim_set_current_win, origin_win) end
+      on_done(body)
+    end)
+  end
+
   vim.api.nvim_create_autocmd("BufWriteCmd", {
     buffer = buf,
     callback = function()
-      vim.cmd("stopinsert")
       local body = get_body()
-      if body == "" then
-        finish(nil)
-        return
-      end
-      finish(body)
+      vim.bo[buf].modified = false
+      cleanup_and_finish(body ~= "" and body or nil)
     end,
   })
 
+  -- Abort if the float is dismissed without going through our keymaps (:q, etc.).
+  -- `done` is already set for intentional closes, so this is a no-op then.
+  vim.api.nvim_create_autocmd("WinClosed", {
+    pattern = tostring(win),
+    once = true,
+    callback = function() cleanup_and_finish(nil) end,
+  })
+
   local map_opts = { buffer = buf, silent = true, noremap = true }
-  vim.keymap.set({ "n", "i" }, "<C-c>", function()
-    vim.cmd("stopinsert")
-    finish(nil)
-  end, map_opts)
+  vim.keymap.set({ "n", "i" }, "<C-c>", function() cleanup_and_finish(nil) end, map_opts)
+  vim.keymap.set("n", "q", function() cleanup_and_finish(nil) end, map_opts)
 end
 
 ---@param events string[]

@@ -16,7 +16,9 @@ local M = {}
 ---@field title string
 ---@field left_rev string
 ---@field right_rev string
----@field files DiffViewFile[]
+---@field files DiffViewFile[] currently visible file list
+---@field all_files DiffViewFile[] full PR/diff file list
+---@field file_filter "all"|"comments"
 ---@field selected_path string|nil
 ---@field panel_buf Buffer
 ---@field panel_win integer
@@ -33,13 +35,55 @@ local function panel_height()
   return fh.panel_height or 16
 end
 
+---@return table
+local function review_keys()
+  local rev = (config.values.forge or {}).review or {}
+  return rev.keymaps or {}
+end
+
+---@param view DiffView
+---@return DiffViewFile[]
+local function visible_files(view)
+  if not view.review or view.file_filter ~= "comments" then return view.all_files or view.files or {} end
+  local session_mod = require("jujutsu.review.session")
+  session_mod.ensure_remote_comments(view.review)
+  local with = session_mod.paths_with_comments(view.review)
+  local out = {}
+  for _, f in ipairs(view.all_files or {}) do
+    if with[f.path] then table.insert(out, f) end
+  end
+  return out
+end
+
 local function refresh_overlays(view)
   if not view or not view.review or not view.selected_path then return end
   local overlay = require("jujutsu.review.overlay")
   local session_mod = require("jujutsu.review.session")
-  local comments = session_mod.all_overlay_comments(view.review)
+  session_mod.ensure_remote_comments(view.review)
+  local comments = session_mod.overlay_comments_for_path(view.review, view.selected_path)
   overlay.render(view.split.left_buf.bufnr, comments, view.selected_path, "LEFT")
   overlay.render(view.split.right_buf.bufnr, comments, view.selected_path, "RIGHT")
+end
+
+local function focus_view(view)
+  if not view or view.closing then return end
+  -- Don't yank focus away from an active floating/terminal picker.
+  local cur = vim.api.nvim_get_current_win()
+  if vim.api.nvim_win_is_valid(cur) then
+    local cfg = vim.api.nvim_win_get_config(cur)
+    if cfg.relative and cfg.relative ~= "" then return end
+    local buf = vim.api.nvim_win_get_buf(cur)
+    if vim.api.nvim_buf_is_valid(buf) then
+      local ft = vim.bo[buf].filetype
+      if ft == "jujutsu-finder" then return end
+    end
+  end
+  if view.tabpage and vim.api.nvim_tabpage_is_valid(view.tabpage) then
+    pcall(vim.api.nvim_set_current_tabpage, view.tabpage)
+  end
+  if view.panel_win and vim.api.nvim_win_is_valid(view.panel_win) then
+    pcall(vim.api.nvim_set_current_win, view.panel_win)
+  end
 end
 
 local function close_view()
@@ -90,6 +134,7 @@ local function render_panel(view)
   local lines = {}
   local highlights = {}
   view.line_map = {}
+  view.files = visible_files(view)
 
   local function add(text, file, hls)
     table.insert(lines, text)
@@ -106,12 +151,16 @@ local function render_panel(view)
     end
   end
 
-  local title = string.format("Diff %s (%d files)", view.title, #view.files)
+  local total = #(view.all_files or view.files)
+  local title = string.format("Diff %s (%d files)", view.title, total)
   if view.review then
+    local filter = view.file_filter == "comments" and "comments" or "all"
     title = string.format(
-      "Review %s (%d files, %d local, %d remote)",
+      "Review %s (%d/%d files [%s], %d local, %d remote)",
       view.title,
       #view.files,
+      total,
+      filter,
       #(view.review.comments or {}),
       #(view.review.remote_comments or {})
     )
@@ -121,28 +170,50 @@ local function render_panel(view)
   add(range, nil, { { col = 0, end_col = #range, hl = "JujutsuSubtle" } })
   add(view.root, nil, { { col = 0, end_col = #view.root, hl = "JujutsuSubtle" } })
   if view.review then
-    local hint = "c comment  C file  S submit  y yank  r reviewed  ? help"
+    local keys = review_keys()
+    local hint = string.format(
+      "c comment  %s reply  C file  S submit  %s filter  %s refresh  %s file-refresh  I conversation  ? help",
+      keys.reply or "a",
+      keys.filter or "f",
+      keys.refresh_comments or "R",
+      keys.refresh_file_comments or "gr"
+    )
     add(hint, nil, { { col = 0, end_col = #hint, hl = "JujutsuHint" } })
   end
   add("", nil, {})
 
   if #view.files == 0 then
-    add("(no changes)", nil, { { col = 0, end_col = #"(no changes)", hl = "JujutsuSubtle" } })
+    local empty = view.file_filter == "comments" and "(no files with comments)" or "(no changes)"
+    add(empty, nil, { { col = 0, end_col = #empty, hl = "JujutsuSubtle" } })
   else
+    local session_mod = view.review and require("jujutsu.review.session") or nil
     for _, file in ipairs(view.files) do
       local selected = view.selected_path == file.path
       local reviewed = view.review and view.review.reviewed_files[file.path]
+      local n_remote = 0
+      local n_local = 0
+      if session_mod and view.review then
+        n_remote = #session_mod.remote_comments_for_path(view.review, file.path)
+        for _, c in ipairs(view.review.comments or {}) do
+          if c.path == file.path then n_local = n_local + 1 end
+        end
+      end
       local mark = reviewed and "✓" or " "
       local status = tostring(file.status or "?")
-      local text = string.format("  %s %s %s", mark, status, file.path)
+      local badge = ""
+      if view.review and (n_remote > 0 or n_local > 0) then
+        badge = string.format("  [%d↑ %d·]", n_remote, n_local)
+      end
+      local text = string.format("  %s %s %s%s", mark, status, file.path, badge)
       local status_col = 2 + #mark + 1
       local path_col = status_col + #status + 1
       local status_hl = require("jujutsu.hl").file_status(status)
       local hls = {
         { col = 2, end_col = 2 + #mark, hl = reviewed and "JujutsuReviewReviewed" or "JujutsuSubtle" },
         { col = status_col, end_col = status_col + #status, hl = status_hl },
-        { col = path_col, end_col = #text, hl = "JujutsuFilePath" },
+        { col = path_col, end_col = path_col + #file.path, hl = "JujutsuFilePath" },
       }
+      if badge ~= "" then table.insert(hls, { col = path_col + #file.path, end_col = #text, hl = "JujutsuSubtle" }) end
       if selected then table.insert(hls, { line_hl = "CursorLine" }) end
       add(text, file, hls)
     end
@@ -161,6 +232,8 @@ local function select_path(view, path)
     return
   end
   view.selected_path = path
+  if view._comment_jump and view._comment_jump.path ~= path then view._comment_jump = nil end
+  if view.review then require("jujutsu.review.session").ensure_remote_comments(view.review) end
   render_panel(view)
   for row, file in pairs(view.line_map) do
     if file and file.path == path then
@@ -170,8 +243,90 @@ local function select_path(view, path)
       break
     end
   end
-  split_mod.show_sides(view.split, view.left_rev, view.right_rev, path)
+  local status = nil
+  for _, f in ipairs(view.all_files or {}) do
+    if f.path == path then
+      status = f.status
+      break
+    end
+  end
+  if not status then
+    for _, f in ipairs(view.files or {}) do
+      if f.path == path then
+        status = f.status
+        break
+      end
+    end
+  end
+  split_mod.show_sides(view.split, view.left_rev, view.right_rev, path, { status = status })
   refresh_overlays(view)
+end
+
+---@param view DiffView
+local function toggle_file_filter(view)
+  if not view.review then return end
+  view.file_filter = view.file_filter == "comments" and "all" or "comments"
+  if view.file_filter == "comments" then require("jujutsu.review.session").ensure_remote_comments(view.review) end
+  view.files = visible_files(view)
+  render_panel(view)
+  if view.selected_path then
+    local still = false
+    for _, f in ipairs(view.files) do
+      if f.path == view.selected_path then
+        still = true
+        break
+      end
+    end
+    if not still then
+      if #view.files > 0 then
+        select_path(view, view.files[1].path)
+      else
+        select_path(view, nil)
+      end
+      return
+    end
+  elseif #view.files > 0 then
+    select_path(view, view.files[1].path)
+    return
+  end
+  require("jujutsu.notify").info(
+    view.file_filter == "comments" and "Showing files with comments" or "Showing all files"
+  )
+end
+
+---@param view DiffView
+local function refresh_all_comments(view)
+  if not view.review then return end
+  local session_mod = require("jujutsu.review.session")
+  require("jujutsu.notify").info("Refreshing remote comments…")
+  session_mod.refresh_remote_comments(view.review)
+  render_panel(view)
+  refresh_overlays(view)
+  require("jujutsu.notify").info(string.format("Remote comments: %d", #(view.review.remote_comments or {})))
+end
+
+---@param view DiffView
+local function refresh_file_comments(view)
+  if not view.review then return end
+  local path = view.selected_path
+  if not path or path == "" then
+    local row = view.panel_win
+      and vim.api.nvim_win_is_valid(view.panel_win)
+      and vim.api.nvim_win_get_cursor(view.panel_win)[1]
+    local file = row and view.line_map[row]
+    path = file and file.path
+  end
+  if not path then
+    require("jujutsu.notify").warn("No file selected")
+    return
+  end
+  local session_mod = require("jujutsu.review.session")
+  require("jujutsu.notify").info("Refreshing comments for " .. path .. "…")
+  session_mod.refresh_remote_comments_for_path(view.review, path)
+  render_panel(view)
+  if view.selected_path == path then refresh_overlays(view) end
+  local n = #session_mod.remote_comments_for_path(view.review, path)
+  require("jujutsu.notify").info(string.format("%s: %d remote comment(s)", path, n))
 end
 
 ---@param view DiffView
@@ -306,9 +461,212 @@ local function edit_comment_at_cursor(view)
 end
 
 ---@param view DiffView
-local function bind_review_keymaps(view)
+local function delete_comment_at_cursor(view)
+  if not view.review then return end
+  local side = vim.api.nvim_get_current_buf() == view.split.left_buf.bufnr and "LEFT" or "RIGHT"
+  local line = vim.api.nvim_win_get_cursor(0)[1]
+  local comment = local_comment_at(view, side, line)
+  if not comment then
+    require("jujutsu.notify").warn("No unsubmitted comment on this line")
+    return
+  end
+  local session_mod = require("jujutsu.review.session")
+  if session_mod.remove_comment(view.review, comment.id) then
+    render_panel(view)
+    refresh_overlays(view)
+    require("jujutsu.notify").info("Removed unsubmitted comment")
+  end
+end
+
+---@param view DiffView
+---@param side "LEFT"|"RIGHT"
+---@param line integer
+---@return table[]
+local function remote_comments_at(view, side, line)
+  if not view.review or not view.selected_path then return {} end
+  local session_mod = require("jujutsu.review.session")
+  local out = {}
+  for _, c in ipairs(session_mod.remote_comments_for_path(view.review, view.selected_path)) do
+    if (c.side or "RIGHT") == side and tonumber(c.line) == line then table.insert(out, c) end
+  end
+  return out
+end
+
+---@param view DiffView
+local function reply_at_cursor(view)
+  if not view.review then return end
+  local provider = require("jujutsu.forge.provider")
+  local threads = require("jujutsu.review.threads")
+  local ui = require("jujutsu.review.ui")
+  local session_mod = require("jujutsu.review.session")
+  local notify = require("jujutsu.notify")
+
+  if not provider.supports_reply(view.review.remote) then
+    notify.warn("Threaded replies are not supported for this forge")
+    return
+  end
+
+  local side = vim.api.nvim_get_current_buf() == view.split.left_buf.bufnr and "LEFT" or "RIGHT"
+  local line = vim.api.nvim_win_get_cursor(0)[1]
+  local candidates = {}
+  for _, c in ipairs(remote_comments_at(view, side, line)) do
+    if threads.can_reply(c) then table.insert(candidates, c) end
+  end
+  if #candidates == 0 then
+    notify.warn("No remote comment to reply to on this line")
+    return
+  end
+
+  local function do_reply(target)
+    if not target then return end
+    local title = string.format("Reply to @%s", target.author or "comment")
+    ui.prompt_comment(title, {}, function(body)
+      if not body or body == "" then return end
+      local function post()
+        local ok, err = provider.post_reply(view.review.root, view.review.number, {
+          parent_id = target.id,
+          discussion_id = target.discussion_id,
+          body = body,
+        }, view.review.remote)
+        if ok then
+          session_mod.refresh_remote_comments_for_path(view.review, view.selected_path)
+          render_panel(view)
+          refresh_overlays(view)
+          notify.info("Reply posted")
+          return
+        end
+        if view.review.remote and provider.is_auth_error(err) then
+          notify.error(err or "Authentication failed")
+          provider.handle_auth_failure(view.review.remote, function(updated)
+            if updated then vim.schedule(function() require("jujutsu.async").void(post) end) end
+          end)
+          return
+        end
+        notify.error(err or "Failed to post reply")
+      end
+      require("jujutsu.async").void(post)
+    end)
+  end
+
+  if #candidates == 1 then
+    do_reply(candidates[1])
+    return
+  end
+
+  local labels = {}
+  for _, c in ipairs(candidates) do
+    local preview = (c.body or ""):gsub("\n", " ")
+    if #preview > 60 then preview = preview:sub(1, 57) .. "..." end
+    local depth = c.parent_id and "↳ " or ""
+    table.insert(labels, string.format("%s@%s: %s", depth, c.author or "?", preview))
+  end
+  vim.ui.select(labels, { prompt = "Reply to comment" }, function(_, idx)
+    if idx then do_reply(candidates[idx]) end
+  end)
+end
+
+---Reveal a line in a diff window without leaving the caller focused elsewhere.
+---Updates that window's cursor (required for `diffthis` / scrollbind) then restores focus.
+---@param win integer
+---@param line integer
+---@param restore_win? integer
+local function reveal_diff_line(win, line, restore_win)
+  if not win or not vim.api.nvim_win_is_valid(win) then return end
+  local buf = vim.api.nvim_win_get_buf(win)
+  if not vim.api.nvim_buf_is_valid(buf) then return end
+  local line_count = vim.api.nvim_buf_line_count(buf)
+  if line_count < 1 then return end
+  if line < 1 then line = 1 end
+  if line > line_count then line = line_count end
+
+  restore_win = restore_win or vim.api.nvim_get_current_win()
+  -- Briefly enter the diff win so diff/scrollbind applies the new position.
+  pcall(vim.api.nvim_set_current_win, win)
+  pcall(vim.api.nvim_win_set_cursor, win, { line, 0 })
+  pcall(vim.cmd, "normal! zz")
+  if restore_win and vim.api.nvim_win_is_valid(restore_win) then pcall(vim.api.nvim_set_current_win, restore_win) end
+end
+
+---Path to navigate: file under the panel cursor, else the currently shown file.
+---@param view DiffView
+---@return string|nil
+local function jump_comment_path(view)
+  if view.panel_win and vim.api.nvim_win_is_valid(view.panel_win) then
+    local row = vim.api.nvim_win_get_cursor(view.panel_win)[1]
+    local file = view.line_map[row]
+    if file and file.path and file.path ~= "" then return file.path end
+  end
+  return view.selected_path
+end
+
+---Jump to next/prev comment.
+---From the file list (`keep_focus`): scroll the matching diff side, stay on the panel.
+---From a diff buffer: move the cursor in the current window.
+---@param view DiffView
+---@param direction integer 1 or -1
+---@param opts? { keep_focus?: boolean }
+local function jump_comment(view, direction, opts)
+  opts = opts or {}
   if not view.review then return end
   local overlay = require("jujutsu.review.overlay")
+  local session_mod = require("jujutsu.review.session")
+  local notify = require("jujutsu.notify")
+  local keep_focus = opts.keep_focus == true
+
+  session_mod.ensure_remote_comments(view.review)
+
+  local path = keep_focus and jump_comment_path(view) or view.selected_path
+  if not path or path == "" then
+    notify.warn("No file selected")
+    return
+  end
+
+  -- From the file list, show the file under the cursor if it isn't already.
+  if keep_focus and view.selected_path ~= path then select_path(view, path) end
+
+  local all = session_mod.all_overlay_comments(view.review)
+  local targets = overlay.comment_targets(all, path)
+  if #targets == 0 then
+    notify.warn("No comments on " .. path)
+    return
+  end
+
+  if keep_focus then
+    local nav = view._comment_jump
+    local from_line = 0
+    if nav and nav.path == path and type(nav.line) == "number" then from_line = nav.line end
+    local target = overlay.next_comment_target(all, path, from_line, direction)
+    if not target then return end
+    local win = target.side == "LEFT" and view.split.left_win or view.split.right_win
+    if not win or not vim.api.nvim_win_is_valid(win) then
+      -- Added/deleted single-pane layout: jump on the visible side instead.
+      win = view.split.right_win
+      if not win or not vim.api.nvim_win_is_valid(win) then win = view.split.left_win end
+    end
+    if not win or not vim.api.nvim_win_is_valid(win) then
+      notify.warn("Diff window is not available")
+      return
+    end
+    view._comment_jump = { path = path, side = target.side, line = target.line }
+    reveal_diff_line(win, target.line, view.panel_win)
+    return
+  end
+
+  local side = vim.api.nvim_get_current_buf() == view.split.left_buf.bufnr and "LEFT" or "RIGHT"
+  local cur = vim.api.nvim_win_get_cursor(0)[1]
+  local next_line = overlay.next_comment_line(all, path, side, cur, direction)
+  if not next_line then
+    notify.warn("No comments on this side")
+    return
+  end
+  view._comment_jump = { path = path, side = side, line = next_line }
+  vim.api.nvim_win_set_cursor(0, { next_line, 0 })
+  pcall(vim.cmd, "normal! zz")
+end
+
+---@param view DiffView
+local function bind_review_keymaps(view)
+  if not view.review then return end
   local ui = require("jujutsu.review.ui")
   local session_mod = require("jujutsu.review.session")
 
@@ -357,24 +715,16 @@ local function bind_review_keymaps(view)
 
   map_diff("e", function() edit_comment_at_cursor(view) end, "EditComment")
   map_diff("i", function() edit_comment_at_cursor(view) end, "EditComment")
+  map_diff("x", function() delete_comment_at_cursor(view) end, "DeleteComment")
 
-  map_diff("m", function()
-    if not view.selected_path then return end
-    local side = side_for_buf(vim.api.nvim_get_current_buf())
-    local cur = vim.api.nvim_win_get_cursor(0)[1]
-    local all = session_mod.all_overlay_comments(view.review)
-    local next_line = overlay.next_comment_line(all, view.selected_path, side, cur, 1)
-    if next_line then vim.api.nvim_win_set_cursor(0, { next_line, 0 }) end
-  end, "NextComment")
+  local keys = review_keys()
+  map_diff(keys.filter or "f", function() toggle_file_filter(view) end, "ToggleFileFilter")
+  map_diff(keys.refresh_comments or "R", function() refresh_all_comments(view) end, "RefreshComments")
+  map_diff(keys.refresh_file_comments or "gr", function() refresh_file_comments(view) end, "RefreshFileComments")
+  map_diff(keys.reply or "a", function() reply_at_cursor(view) end, "ReplyComment")
 
-  map_diff("M", function()
-    if not view.selected_path then return end
-    local side = side_for_buf(vim.api.nvim_get_current_buf())
-    local cur = vim.api.nvim_win_get_cursor(0)[1]
-    local all = session_mod.all_overlay_comments(view.review)
-    local prev = overlay.next_comment_line(all, view.selected_path, side, cur, -1)
-    if prev then vim.api.nvim_win_set_cursor(0, { prev, 0 }) end
-  end, "PrevComment")
+  map_diff("m", function() jump_comment(view, 1) end, "NextComment")
+  map_diff("M", function() jump_comment(view, -1) end, "PrevComment")
 
   map_diff("y", function() ui.copy_markdown(session_mod.markdown(view.review)) end, "YankMarkdown")
 
@@ -384,26 +734,59 @@ local function bind_review_keymaps(view)
     end)
   end, "Submit")
 
-  map_diff(
-    "?",
-    function()
-      ui.help(table.concat({
-        "Review keymaps",
-        "",
-        "c        comment at cursor line",
-        "C        file comment",
-        "v/V + c  range comment",
-        ";c       review-level comment",
-        "e / i    edit unsubmitted comment at cursor",
-        "m / M    next / previous comment",
-        "r        toggle file reviewed (panel)",
-        "y        yank markdown",
-        "S        submit review",
-        "q        close",
-      }, "\n"))
-    end,
-    "Help"
-  )
+  local issue_open = ((config.values.issue_panel or {}).keymaps or {}).open or "I"
+  map_diff(issue_open, function()
+    if not view.review or not view.review.number then return end
+    require("jujutsu.issue_panel").open({
+      root = view.root,
+      remote = view.review.remote,
+      number = view.review.number,
+      kind = "pr",
+    })
+  end, "IssuePanel")
+
+  map_diff("o", function()
+    local remote_mod = require("jujutsu.forge.remote")
+    local rem = view.review.remote or remote_mod.detect(view.root)
+    if not rem or not view.selected_path then
+      require("jujutsu.notify").warn("No forge file to open")
+      return
+    end
+    local side = side_for_buf(vim.api.nvim_get_current_buf())
+    local line = vim.api.nvim_win_get_cursor(0)[1]
+    local commit = side == "LEFT" and (view.review.pr and view.review.pr.base_sha or view.left_rev)
+      or (view.review.pr and view.review.pr.head_sha or view.right_rev)
+    remote_mod.open_url(remote_mod.pr_file_url(rem, view.review.number, view.selected_path, {
+      line = line,
+      side = side,
+      commit = commit,
+    }))
+  end, "OpenInBrowser")
+
+  map_diff("?", function()
+    local k = review_keys()
+    ui.help(table.concat({
+      "Review keymaps",
+      "",
+      "c        comment at cursor line",
+      "C        file comment",
+      "v/V + c  range comment",
+      ";c       review-level comment",
+      (k.reply or "a") .. "        reply to remote comment thread",
+      "e / i    edit unsubmitted comment at cursor",
+      "x        delete unsubmitted comment at cursor",
+      "m / M    next / previous comment (diff: move cursor; file list: scroll only)",
+      (k.filter or "f") .. "        toggle all files / files with comments",
+      (k.refresh_comments or "R") .. "        refresh all remote comments (cache)",
+      (k.refresh_file_comments or "gr") .. "       refresh remote comments for current file",
+      "r        toggle file reviewed (panel)",
+      "y        yank markdown",
+      "S        submit review",
+      "o        open file/PR line in browser",
+      issue_open .. "        issue/PR conversation panel",
+      "q        close",
+    }, "\n"))
+  end, "Help")
 end
 
 ---@param view DiffView
@@ -422,13 +805,37 @@ local function bind_keymaps(view)
     if file then select_path(view, file.path) end
   end
 
+  ---Open selected/cursor file in the forge web UI at the right-hand commit.
+  local function open_file_in_browser()
+    local remote_mod = require("jujutsu.forge.remote")
+    local rem = (view.review and view.review.remote) or remote_mod.detect(view.root)
+    if not rem then
+      require("jujutsu.notify").warn("Could not detect forge remote")
+      return
+    end
+    local row = vim.api.nvim_win_get_cursor(view.panel_win)[1]
+    local file = view.line_map[row]
+    local path = (file and file.path) or view.selected_path
+    if not path or path == "" then
+      require("jujutsu.notify").warn("No file selected")
+      return
+    end
+    local commit = (view.review and view.review.pr and view.review.pr.head_sha) or view.right_rev or ""
+    if commit == "" then
+      require("jujutsu.notify").warn("No commit to open")
+      return
+    end
+    remote_mod.open_url(remote_mod.file_url(rem, commit, path))
+  end
+
   map("<cr>", open_under_cursor, "Open")
-  map("o", open_under_cursor, "Open")
+  map("o", open_file_in_browser, "OpenInBrowser")
   map("<tab>", function() select_adjacent(view, 1) end, "NextFile")
   map("<s-tab>", function() select_adjacent(view, -1) end, "PrevFile")
   map("L", function() open_description(view) end, "Description")
 
   if view.review then
+    local keys = review_keys()
     map("r", function()
       local row = vim.api.nvim_win_get_cursor(view.panel_win)[1]
       local file = view.line_map[row]
@@ -436,6 +843,11 @@ local function bind_keymaps(view)
       require("jujutsu.review.session").toggle_reviewed(view.review, file.path)
       render_panel(view)
     end, "ToggleReviewed")
+    map(keys.filter or "f", function() toggle_file_filter(view) end, "ToggleFileFilter")
+    map(keys.refresh_comments or "R", function() refresh_all_comments(view) end, "RefreshComments")
+    map(keys.refresh_file_comments or "gr", function() refresh_file_comments(view) end, "RefreshFileComments")
+    map("m", function() jump_comment(view, 1, { keep_focus = true }) end, "NextComment")
+    map("M", function() jump_comment(view, -1, { keep_focus = true }) end, "PrevComment")
     map("y", function()
       local md = require("jujutsu.review.session").markdown(view.review)
       require("jujutsu.review.ui").copy_markdown(md)
@@ -445,26 +857,40 @@ local function bind_keymaps(view)
         if ok then render_panel(view) end
       end)
     end, "Submit")
-    map(
-      "?",
-      function()
-        require("jujutsu.review.ui").help(table.concat({
-          "Review keymaps",
-          "",
-          "c        comment at cursor line (diff)",
-          "C        file comment (diff)",
-          "v/V + c  range comment (diff)",
-          ";c       review-level comment",
-          "e / i    edit unsubmitted comment at cursor",
-          "m / M    next / previous comment",
-          "r        toggle file reviewed",
-          "y        yank markdown",
-          "S        submit review",
-          "q        close",
-        }, "\n"))
-      end,
-      "Help"
-    )
+    local issue_open = ((config.values.issue_panel or {}).keymaps or {}).open or "I"
+    map(issue_open, function()
+      if not view.review or not view.review.number then return end
+      require("jujutsu.issue_panel").open({
+        root = view.root,
+        remote = view.review.remote,
+        number = view.review.number,
+        kind = "pr",
+      })
+    end, "IssuePanel")
+    map("?", function()
+      local rk = review_keys()
+      require("jujutsu.review.ui").help(table.concat({
+        "Review keymaps",
+        "",
+        "c        comment at cursor line (diff)",
+        "C        file comment (diff)",
+        "v/V + c  range comment (diff)",
+        ";c       review-level comment",
+        (rk.reply or "a") .. "        reply to remote comment thread (diff)",
+        "e / i    edit unsubmitted comment at cursor",
+        "x        delete unsubmitted comment at cursor",
+        "m / M    next / previous comment (diff: move cursor; file list: scroll only)",
+        (rk.filter or "f") .. "        toggle all files / files with comments",
+        (rk.refresh_comments or "R") .. "        refresh all remote comments (cache)",
+        (rk.refresh_file_comments or "gr") .. "       refresh remote comments for current file",
+        "r        toggle file reviewed",
+        "y        yank markdown",
+        "S        submit review",
+        "o        open file in browser (panel) / PR line (diff)",
+        issue_open .. "        issue/PR conversation panel",
+        "q        close",
+      }, "\n"))
+    end, "Help")
   end
 
   for _, dbuf in ipairs({ view.split.left_buf, view.split.right_buf }) do
@@ -474,6 +900,21 @@ local function bind_keymaps(view)
         vim.api.nvim_set_current_win(view.panel_win)
       end
     end, { buffer = dbuf.bufnr, silent = true, noremap = true, desc = "jujutsu: FocusDiffPanel" })
+    -- Non-review diffs: open file at this side's commit + line. Review mode overrides via bind_review_keymaps.
+    if not view.review then
+      vim.keymap.set("n", "o", function()
+        local remote_mod = require("jujutsu.forge.remote")
+        local rem = remote_mod.detect(view.root)
+        if not rem or not view.selected_path then
+          require("jujutsu.notify").warn("No forge file to open")
+          return
+        end
+        local is_left = vim.api.nvim_get_current_buf() == view.split.left_buf.bufnr
+        local commit = is_left and view.left_rev or view.right_rev
+        local line = vim.api.nvim_win_get_cursor(0)[1]
+        remote_mod.open_url(remote_mod.file_url(rem, commit, view.selected_path, line))
+      end, { buffer = dbuf.bufnr, silent = true, noremap = true, desc = "jujutsu: OpenInBrowser" })
+    end
   end
 
   bind_review_keymaps(view)
@@ -542,7 +983,9 @@ function M.open(opts)
     vim.wo[panel_win].relativenumber = false
   end
 
-  local split = split_mod.create(root, left_win, right_win, { uri_prefix = "jujutsu://diff/" .. title })
+  local split = split_mod.create(root, left_win, right_win, {
+    uri_prefix = "jujutsu://diff/" .. require("jujutsu.util").buf_name_path(title),
+  })
 
   instance = {
     root = root,
@@ -550,7 +993,9 @@ function M.open(opts)
     title = title,
     left_rev = left_rev,
     right_rev = right_rev,
+    all_files = files or {},
     files = files or {},
+    file_filter = "all",
     selected_path = nil,
     panel_buf = panel_buf,
     panel_win = panel_win,
@@ -569,7 +1014,13 @@ function M.open(opts)
     split_mod.clear(split)
   end
 
-  vim.api.nvim_set_current_win(panel_win)
+  focus_view(instance)
+  -- Picker UIs restore the previous window on deferred close callbacks; reclaim
+  -- focus across a few ticks so we win that race reliably.
+  local opened = instance
+  for _, delay in ipairs({ 0, 30, 80, 160 }) do
+    vim.defer_fn(function() focus_view(opened) end, delay)
+  end
 
   vim.api.nvim_create_autocmd("TabClosed", {
     group = vim.api.nvim_create_augroup("JujutsuDiffView", { clear = true }),
@@ -585,6 +1036,23 @@ function M.open(opts)
       end
     end,
   })
+
+  -- Re-wrap comment virt_lines when the diff windows change size.
+  if instance.review then
+    local resize_gen = 0
+    vim.api.nvim_create_autocmd({ "VimResized", "WinResized" }, {
+      group = "JujutsuDiffView",
+      callback = function()
+        if not instance or instance.closing or not instance.review then return end
+        resize_gen = resize_gen + 1
+        local gen = resize_gen
+        vim.defer_fn(function()
+          if gen ~= resize_gen then return end
+          if instance and not instance.closing and instance.review then refresh_overlays(instance) end
+        end, 50)
+      end,
+    })
+  end
 end
 
 ---Compatibility shim: old callers passed a git-format patch. Open WC-style view instead when possible.

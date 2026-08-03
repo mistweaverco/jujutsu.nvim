@@ -179,13 +179,17 @@ function M.prompt(remote, defaults, cb)
         cb(nil)
         return
       end
-      input(string.format("Bitbucket API token (%s): ", workspace), defaults.token, function(token)
-        if not token then
-          cb(nil)
-          return
+      input(
+        string.format("Bitbucket API token with write:pullrequest (%s): ", workspace),
+        defaults.token,
+        function(token)
+          if not token then
+            cb(nil)
+            return
+          end
+          cb({ user = user, token = token })
         end
-        cb({ user = user, token = token })
-      end)
+      )
     end)
     return
   end
@@ -258,7 +262,12 @@ function M.handle_invalid(remote, cb)
   table.insert(choices, { id = "cancel", text = "Cancel" })
 
   vim.ui.select(choices, {
-    prompt = string.format("Invalid credentials for %s (%s). What next?", label, source or "unknown"),
+    prompt = string.format(
+      "Auth/scope problem for %s (%s). Update token? "
+        .. "(Bitbucket approve/request-changes needs write:pullrequest:bitbucket)",
+      label,
+      source or "unknown"
+    ),
     format_item = function(item) return item.text end,
   }, function(choice)
     if not choice or choice.id == "cancel" then
@@ -291,10 +300,6 @@ end
 ---@param err string|nil
 ---@param status integer|nil
 ---@return boolean
-function M.is_auth_error(err, status)
-  if status == 401 or status == 403 then return true end
-  if type(err) ~= "string" then return false end
-  return err:match("^HTTP 401") ~= nil or err:match("^HTTP 403") ~= nil
-end
+function M.is_auth_error(err, status) return require("jujutsu.forge.http").is_auth_error(err, status) end
 
 return M

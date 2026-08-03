@@ -27,9 +27,7 @@ end
 function M.available(remote)
   local mod = backend(remote)
   if not mod then return false end
-  if remote and (remote.provider == "bitbucket" or remote.provider == "forgejo") then
-    return mod.available(remote)
-  end
+  if remote and (remote.provider == "bitbucket" or remote.provider == "forgejo") then return mod.available(remote) end
   return mod.available()
 end
 
@@ -101,7 +99,7 @@ end
 ---@param root string
 ---@param number integer|string
 ---@param remote? ForgeRemote
----@return boolean, string|nil
+---@return boolean, string|nil, { posted_comments?: boolean }|nil
 function M.submit_review(root, number, opts, remote)
   remote = remote or remote_mod.detect(root)
   local mod = backend(remote)
@@ -122,12 +120,116 @@ function M.list_review_comments(root, number, remote)
   return mod.list_review_comments(root, remote, number)
 end
 
+---Reply to an inline review comment / discussion (forge-specific).
+---@param root string
+---@param number integer|string
+---@param opts { parent_id?: string|integer, discussion_id?: string, body: string }
+---@param remote? ForgeRemote
+---@return boolean, string|nil
+function M.post_reply(root, number, opts, remote)
+  remote = remote or remote_mod.detect(root)
+  local mod = backend(remote)
+  if not mod or not remote then return false, "No forge provider for this repository" end
+  if not mod.post_reply then return false, "Threaded replies not supported for " .. remote.provider end
+  return mod.post_reply(root, remote, number, opts or {})
+end
+
+---@param remote ForgeRemote|nil
+---@return boolean
+function M.supports_reply(remote)
+  local mod = backend(remote)
+  return mod ~= nil and type(mod.post_reply) == "function"
+end
+
 ---@param remote ForgeRemote|nil
 ---@return string[]
 function M.submit_events(remote)
   if not remote then return { "COMMENT" } end
   if remote.provider == "github" then return { "COMMENT", "APPROVE", "REQUEST_CHANGES", "DRAFT" } end
   return { "COMMENT", "APPROVE", "REQUEST_CHANGES" }
+end
+
+---@class ForgeRemoteComment
+---@field id string
+---@field path string
+---@field side "LEFT"|"RIGHT"
+---@field line integer
+---@field start_line? integer
+---@field body string
+---@field author string
+---@field outdated? boolean
+---@field url? string
+---@field remote true
+---@field parent_id? string
+---@field discussion_id? string
+---@field provider? string
+---@field created_at? string
+---@field updated_at? string
+---@field supports_reply? boolean
+
+---@class ForgeTopic
+---@field kind "issue"|"pr"
+---@field number integer|string
+---@field title string
+---@field body string
+---@field state string
+---@field draft? boolean
+---@field merged? boolean
+---@field author string
+---@field created_at? string
+---@field updated_at? string
+---@field labels string[]
+---@field assignees string[]
+---@field url string
+---@field repo string
+
+---@class ForgeConversationComment
+---@field id string
+---@field author string
+---@field author_association? string
+---@field created_at? string
+---@field updated_at? string
+---@field body string
+---@field url? string
+---@field kind? "comment"|"review"
+
+---@param root string
+---@param number integer|string
+---@param opts? { kind?: "issue"|"pr" }
+---@param remote? ForgeRemote
+---@return ForgeTopic|nil, string|nil
+function M.get_topic(root, number, opts, remote)
+  remote = remote or remote_mod.detect(root)
+  local mod = backend(remote)
+  if not mod or not remote then return nil, "No forge provider for this repository" end
+  if not mod.get_topic then return nil, "Issue/PR details not supported for " .. remote.provider end
+  return mod.get_topic(root, remote, number, opts or {})
+end
+
+---@param root string
+---@param number integer|string
+---@param opts? { kind?: "issue"|"pr" }
+---@param remote? ForgeRemote
+---@return ForgeConversationComment[], string|nil
+function M.list_comments(root, number, opts, remote)
+  remote = remote or remote_mod.detect(root)
+  local mod = backend(remote)
+  if not mod or not remote or not mod.list_comments then return {}, "Conversation not supported for this forge" end
+  return mod.list_comments(root, remote, number, opts or {})
+end
+
+---@param root string
+---@param number integer|string
+---@param body string
+---@param opts? { kind?: "issue"|"pr" }
+---@param remote? ForgeRemote
+---@return boolean, string|nil
+function M.post_comment(root, number, body, opts, remote)
+  remote = remote or remote_mod.detect(root)
+  local mod = backend(remote)
+  if not mod or not remote then return false, "No forge provider for this repository" end
+  if not mod.post_comment then return false, "Posting comments not supported for " .. remote.provider end
+  return mod.post_comment(root, remote, number, body, opts or {})
 end
 
 return M
