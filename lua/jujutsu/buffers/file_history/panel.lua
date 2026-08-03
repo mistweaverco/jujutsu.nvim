@@ -271,9 +271,11 @@ function M.render(panel, count)
         for _, file in ipairs(entry.files) do
           local file_selected = selected and panel.selected_path == file.path
           local ftext = string.format("    %s %s", file.status, file.path)
+          local status_hl = require("jujutsu.hl").file_status(file.status)
+          local status_len = #tostring(file.status or "")
           local fhls = {
-            { col = 4, end_col = 5, hl = "JujutsuDiffHeader" },
-            { col = 6, end_col = #ftext, hl = "Normal" },
+            { col = 4, end_col = 4 + status_len, hl = status_hl },
+            { col = 5 + status_len, end_col = #ftext, hl = "JujutsuFilePath" },
           }
           if file_selected then table.insert(fhls, { line_hl = "CursorLine" }) end
           add(ftext, { kind = "file", entry = entry, file = file, index = i }, fhls)

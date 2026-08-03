@@ -242,8 +242,14 @@ markdown yank, and forge submit.
 Providers: ~
 - github     via `gh`
 - gitlab     via `glab`
-- forgejo    Codeberg / Forgejo via REST (`FORGEJO_TOKEN` / `CODEBERG_TOKEN`)
-- bitbucket  Bitbucket Cloud via REST (`BITBUCKET_USER` + `BITBUCKET_TOKEN`)
+- forgejo    Codeberg / Forgejo via REST (prompted per host, or
+             `FORGEJO_TOKEN` / `CODEBERG_TOKEN`)
+- bitbucket  Bitbucket Cloud via REST (prompted per workspace, or
+             `BITBUCKET_USER` + `BITBUCKET_TOKEN`)
+
+Credentials for Bitbucket / Forgejo are stored under
+`stdpath("data")/jujutsu/credentials.json`. Invalid credentials prompt to
+update or delete the stored entry.
 
 Entry points: ~
 - Diff popup `dR`
@@ -262,6 +268,7 @@ Review DiffView keys: ~
   ?        help
 
 Sessions are stored under `stdpath("data")/jujutsu/reviews/`.
+Bitbucket / Forgejo credentials under `stdpath("data")/jujutsu/credentials.json`.
 
 ==============================================================================
 vim:tw=78:ts=8:ft=help:norl:

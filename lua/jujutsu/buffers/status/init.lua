@@ -32,18 +32,7 @@ local function bookmark_commit_limit(key)
   return (instance.bookmark_limits and instance.bookmark_limits[key]) or default_commit_limit()
 end
 
-local function status_hl(st)
-  if st == "A" or st == "N" then
-    return "JujutsuFileAdded"
-  elseif st == "D" then
-    return "JujutsuFileDeleted"
-  elseif st == "?" then
-    return "JujutsuFileUntracked"
-  elseif st == "R" then
-    return "JujutsuFileRenamed"
-  end
-  return "JujutsuFileModified"
-end
+local function status_hl(st) return require("jujutsu.hl").file_status(st) end
 
 local function mode_text(st)
   local t = config.values.status.mode_text

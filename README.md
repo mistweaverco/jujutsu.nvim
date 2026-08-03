@@ -175,8 +175,10 @@ you submit or yank markdown.
 |----------|-----------|-------------|
 | GitHub | `gh` | `gh auth login` |
 | GitLab | `glab` | `glab auth login` |
-| Codeberg / Forgejo | `curl` REST | `FORGEJO_TOKEN` / `CODEBERG_TOKEN` or `forge.forgejo.token` |
-| Bitbucket Cloud | `curl` REST | `BITBUCKET_USER` + `BITBUCKET_TOKEN` or `forge.bitbucket.*` |
+| Codeberg / Forgejo | `curl` REST | Prompted per host and stored under `stdpath("data")/jujutsu/credentials.json`, or `FORGEJO_TOKEN` / `CODEBERG_TOKEN` / `forge.forgejo.token` |
+| Bitbucket Cloud | `curl` REST | Prompted per workspace (username + token) and stored in the same file, or `BITBUCKET_USER` + `BITBUCKET_TOKEN` / `forge.bitbucket.*` |
+
+On HTTP 401/403, review asks whether to supply new credentials or delete the stored ones.
 
 **Entry points**
 
@@ -198,7 +200,7 @@ you submit or yank markdown.
 | `S` | Submit (Comment / Approve / Request changes; Draft on GitHub only) |
 | `?` | Help |
 
-Sessions persist under `stdpath("data")/jujutsu/reviews/`.
+Sessions persist under `stdpath("data")/jujutsu/reviews/`. Bitbucket / Forgejo credentials persist under `stdpath("data")/jujutsu/credentials.json`.
 
 ```lua
 forge = {

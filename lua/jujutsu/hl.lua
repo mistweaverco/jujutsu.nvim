@@ -109,9 +109,9 @@ function M.setup()
     JujutsuObjectId = { fg = p.cyan },
     JujutsuFilePath = { link = "Normal" },
     JujutsuFileMode = { fg = p.blue, bold = p.bold, italic = p.italic },
-    JujutsuFileAdded = { fg = p.bg_green, bold = p.bold, italic = p.italic },
+    JujutsuFileAdded = { fg = p.green, bold = p.bold, italic = p.italic },
     JujutsuFileModified = { fg = p.blue, bold = p.bold, italic = p.italic },
-    JujutsuFileDeleted = { fg = p.bg_red, bold = p.bold, italic = p.italic },
+    JujutsuFileDeleted = { fg = p.red, bold = p.bold, italic = p.italic },
     JujutsuFileUntracked = { fg = p.grey, italic = p.italic },
     JujutsuFileRenamed = { fg = p.purple, bold = p.bold, italic = p.italic },
     JujutsuConflict = { fg = p.yellow, bold = p.bold },
@@ -170,6 +170,17 @@ function M.attach_autocmd()
     group = vim.api.nvim_create_augroup("JujutsuHighlights", { clear = true }),
     callback = function() M.setup() end,
   })
+end
+
+---Highlight group for a jj/git-style file status letter (A/M/D/R/?/…).
+---@param st string|nil
+---@return string
+function M.file_status(st)
+  if st == "A" or st == "N" then return "JujutsuFileAdded" end
+  if st == "D" then return "JujutsuFileDeleted" end
+  if st == "?" then return "JujutsuFileUntracked" end
+  if st == "R" or st == "C" then return "JujutsuFileRenamed" end
+  return "JujutsuFileModified"
 end
 
 return M

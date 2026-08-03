@@ -25,6 +25,33 @@ function M.submit(session, event)
 end
 
 ---@param session ReviewSession
+---@param event string
+---@param on_done? fun(ok: boolean)
+local function submit_with_auth_retry(session, event, on_done)
+  local ok, err = M.submit(session, event)
+  if ok then
+    notify.info("Review submitted (" .. event .. ")")
+    if on_done then on_done(true) end
+    return
+  end
+  if session.remote and provider.is_auth_error(err) then
+    notify.error(err or "Authentication failed")
+    provider.handle_auth_failure(session.remote, function(updated)
+      if updated then
+        vim.schedule(function()
+          require("jujutsu.async").void(function() submit_with_auth_retry(session, event, on_done) end)
+        end)
+        return
+      end
+      if on_done then on_done(false) end
+    end)
+    return
+  end
+  notify.error(err or "Submit failed")
+  if on_done then on_done(false) end
+end
+
+---@param session ReviewSession
 ---@param on_done? fun(ok: boolean)
 function M.pick_and_submit(session, on_done)
   if not session.remote or not session.number then
@@ -43,13 +70,7 @@ function M.pick_and_submit(session, on_done)
       if on_done then on_done(false) end
       return
     end
-    local ok, err = M.submit(session, event)
-    if ok then
-      notify.info("Review submitted (" .. event .. ")")
-    else
-      notify.error(err or "Submit failed")
-    end
-    if on_done then on_done(ok) end
+    submit_with_auth_retry(session, event, on_done)
   end)
 end
 

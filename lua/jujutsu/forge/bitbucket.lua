@@ -1,33 +1,35 @@
-local config = require("jujutsu.config")
+local credentials = require("jujutsu.forge.credentials")
 local http = require("jujutsu.forge.http")
 
 local M = {}
 
 local API_BASE = "https://api.bitbucket.org/2.0"
 
+---@param remote? { owner: string }
 ---@return string|nil, string|nil, string|nil
-local function credentials()
-  local bb = (config.values.forge and config.values.forge.bitbucket) or {}
-  local user = bb.user or vim.env.BITBUCKET_USER
-  local token = bb.token or vim.env.BITBUCKET_TOKEN
-  if not user or user == "" or not token or token == "" then
-    return nil, nil, "Missing Bitbucket credentials (forge.bitbucket.user/token or BITBUCKET_USER/BITBUCKET_TOKEN)"
+local function resolve(remote)
+  if remote then
+    local creds = credentials.resolve(remote)
+    if creds and creds.user and creds.token then return creds.user, creds.token, nil end
   end
-  return user, token, nil
+  return nil, nil, "Missing Bitbucket credentials for workspace (will prompt on review)"
 end
 
+---@param remote? { owner: string }
 ---@return boolean
-function M.available()
-  local user, token = credentials()
-  return user ~= nil and token ~= nil and vim.fn.executable("curl") == 1
+function M.available(remote)
+  if vim.fn.executable("curl") ~= 1 then return false end
+  if remote then return credentials.has(remote) end
+  return true
 end
 
+---@param remote { owner: string, repo: string }
 ---@param method string
 ---@param path_or_url string
 ---@param body? table
 ---@return table|nil, string|nil
-local function api(method, path_or_url, body)
-  local user, token, auth_err = credentials()
+local function api(remote, method, path_or_url, body)
+  local user, token, auth_err = resolve(remote)
   if auth_err then return nil, auth_err end
   local url = path_or_url
   if not url:match("^https?://") then
@@ -35,7 +37,7 @@ local function api(method, path_or_url, body)
     url = API_BASE .. url
   end
   if type(user) ~= "string" or user == "" or type(token) ~= "string" or token == "" then
-    return nil, "Missing Bitbucket credentials (forge.bitbucket.user/token or BITBUCKET_USER/BITBUCKET_TOKEN)"
+    return nil, "Missing Bitbucket credentials"
   end
   local headers = {
     Authorization = http.basic_auth(user, token),
@@ -47,30 +49,32 @@ local function api(method, path_or_url, body)
   return res.json or {}, nil
 end
 
+---@param remote { owner: string, repo: string }
 ---@param url string
----@return table[]
-local function fetch_all(url)
+---@return table[], string|nil
+local function fetch_all(remote, url)
   local values = {}
   local next_url = url
   while next_url and next_url ~= "" do
-    local result, err = api("GET", next_url)
-    if err or not result then break end
+    local result, err = api(remote, "GET", next_url)
+    if err or not result then return values, err end
     for _, v in ipairs(result.values or {}) do
       table.insert(values, v)
     end
     next_url = type(result.next) == "string" and result.next or ""
   end
-  return values
+  return values, nil
 end
 
 ---@param _ string
 ---@param remote { owner: string, repo: string }
 -- luacheck: ignore 631
----@return { number: integer, title: string, url: string, head_ref: string, base_ref: string, head_sha: string, base_sha: string }[]
+---@return { number: integer, title: string, url: string, head_ref: string, base_ref: string, head_sha: string, base_sha: string }[], string|nil
 function M.list_prs(_, remote)
-  if not M.available() then return {} end
+  if not M.available(remote) then return {}, "Bitbucket credentials missing or curl unavailable" end
   local endpoint = string.format("/repositories/%s/%s/pullrequests?state=OPEN&pagelen=50", remote.owner, remote.repo)
-  local values = fetch_all(endpoint)
+  local values, err = fetch_all(remote, endpoint)
+  if err then return {}, err end
   local out = {}
   for _, pr in ipairs(values) do
     local html = ""
@@ -86,7 +90,7 @@ function M.list_prs(_, remote)
       _raw = pr,
     })
   end
-  return out
+  return out, nil
 end
 
 ---@param _root string
@@ -94,9 +98,9 @@ end
 ---@param number integer|string
 ---@return table|nil, string|nil
 function M.get_pr(_root, remote, number)
-  if not M.available() then return nil, "Bitbucket credentials missing or curl unavailable" end
+  if not M.available(remote) then return nil, "Bitbucket credentials missing or curl unavailable" end
   local pr, err =
-    api("GET", string.format("/repositories/%s/%s/pullrequests/%s", remote.owner, remote.repo, tostring(number)))
+    api(remote, "GET", string.format("/repositories/%s/%s/pullrequests/%s", remote.owner, remote.repo, tostring(number)))
   if err then return nil, err end
   if type(pr) ~= "table" then return nil, "invalid PR response" end
   local html = ""
@@ -114,13 +118,13 @@ function M.get_pr(_root, remote, number)
   }
 end
 
----@param _root string
+---@param root string
 ---@param remote { owner: string, repo: string }
 ---@param number integer|string
 ---@param opts { event?: string, body?: string, comments?: { path: string, body: string, line?: integer, side?: string, start_line?: integer }[] }
 ---@return boolean, string|nil
 function M.submit_review(root, remote, number, opts)
-  if not M.available() then return false, "Bitbucket credentials missing or curl unavailable" end
+  if not M.available(remote) then return false, "Bitbucket credentials missing or curl unavailable" end
   opts = opts or {}
   if opts.event == "DRAFT" then return false, "Draft reviews are GitHub-only" end
 
@@ -152,18 +156,19 @@ function M.submit_review(root, remote, number, opts)
       end
       payload.inline = inline
     end
-    local _, cerr = api("POST", comments_url, payload)
+    local _, cerr = api(remote, "POST", comments_url, payload)
     if cerr then return false, cerr end
   end
 
   if opts.body and opts.body ~= "" then
-    local _, cerr = api("POST", comments_url, { content = { raw = opts.body } })
+    local _, cerr = api(remote, "POST", comments_url, { content = { raw = opts.body } })
     if cerr then return false, cerr end
   end
 
   local event = opts.event or "COMMENT"
   if event == "APPROVE" then
     local _, aerr = api(
+      remote,
       "POST",
       string.format("/repositories/%s/%s/pullrequests/%s/approve", remote.owner, remote.repo, tostring(number)),
       {}
@@ -171,6 +176,7 @@ function M.submit_review(root, remote, number, opts)
     if aerr then return false, aerr end
   elseif event == "REQUEST_CHANGES" then
     local _, rerr = api(
+      remote,
       "POST",
       string.format("/repositories/%s/%s/pullrequests/%s/request-changes", remote.owner, remote.repo, tostring(number)),
       {}
@@ -186,7 +192,7 @@ end
 ---@param number integer|string
 ---@return ForgeRemoteComment[]
 function M.list_review_comments(root, remote, number)
-  if not M.available() then return {} end
+  if not M.available(remote) then return {} end
   local pr, err = M.get_pr(root, remote, number)
   if err or not pr then return {} end
   local comments_url = pr._raw and pr._raw.links and pr._raw.links.comments and pr._raw.links.comments.href
@@ -203,9 +209,9 @@ function M.list_review_comments(root, remote, number)
     comments_url = comments_url .. sep .. "pagelen=100"
   end
 
-  local values = fetch_all(comments_url)
+  local values = select(1, fetch_all(remote, comments_url))
   local out = {}
-  for _, c in ipairs(values) do
+  for _, c in ipairs(values or {}) do
     local inline = c.inline
     if type(inline) == "table" and inline.path then
       local side, line

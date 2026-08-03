@@ -70,4 +70,13 @@ end
 -- luacheck: ignore 631
 function M.basic_auth(user, token) return "Basic " .. vim.base64.encode(string.format("%s:%s", user or "", token or "")) end
 
+---@param err string|nil
+---@param status integer|nil
+---@return boolean
+function M.is_auth_error(err, status)
+  if status == 401 or status == 403 then return true end
+  if type(err) ~= "string" then return false end
+  return err:match("^HTTP 401") ~= nil or err:match("^HTTP 403") ~= nil
+end
+
 return M

@@ -1,18 +1,25 @@
-local config = require("jujutsu.config")
+local credentials = require("jujutsu.forge.credentials")
 local http = require("jujutsu.forge.http")
 
 local M = {}
 
----@return string|nil
-local function token()
-  local fj = (config.values.forge and config.values.forge.forgejo) or {}
-  local t = fj.token or vim.env.FORGEJO_TOKEN or vim.env.CODEBERG_TOKEN
-  if t and t ~= "" then return t end
-  return nil
+---@param remote? { host: string }
+---@return string|nil, string|nil
+local function resolve_token(remote)
+  if remote then
+    local creds = credentials.resolve(remote)
+    if creds and creds.token and creds.token ~= "" then return creds.token, nil end
+  end
+  return nil, "Missing Forgejo/Codeberg token for host (will prompt on review)"
 end
 
+---@param remote? { host: string }
 ---@return boolean
-function M.available() return token() ~= nil and vim.fn.executable("curl") == 1 end
+function M.available(remote)
+  if vim.fn.executable("curl") ~= 1 then return false end
+  if remote then return credentials.has(remote) end
+  return true
+end
 
 ---@param remote { host: string }
 ---@return string
@@ -24,8 +31,10 @@ local function api_base(remote) return string.format("https://%s/api/v1", remote
 ---@param body? table
 ---@return table|nil, string|nil
 local function api(remote, method, path, body)
-  local t = token()
-  if not t then return nil, "Forgejo/Codeberg token missing (forge.forgejo.token or FORGEJO_TOKEN/CODEBERG_TOKEN)" end
+  local t, auth_err = resolve_token(remote)
+  if auth_err or not t then
+    return nil, auth_err or "Forgejo/Codeberg token missing"
+  end
   local url = api_base(remote) .. path
   local headers = {
     Authorization = "token " .. t,
@@ -40,12 +49,13 @@ end
 ---@param _root string
 ---@param remote { host: string, owner: string, repo: string }
 -- luacheck: ignore 631
----@return { number: integer, title: string, url: string, head_ref: string, base_ref: string, head_sha: string, base_sha: string }[]
+---@return { number: integer, title: string, url: string, head_ref: string, base_ref: string, head_sha: string, base_sha: string }[], string|nil
 function M.list_prs(_root, remote)
-  if not M.available() then return {} end
+  if not M.available(remote) then return {}, "Forgejo/Codeberg token missing or curl unavailable" end
   local data, err =
     api(remote, "GET", string.format("/repos/%s/%s/pulls?state=open&limit=50", remote.owner, remote.repo))
-  if err or type(data) ~= "table" then return {} end
+  if err then return {}, err end
+  if type(data) ~= "table" then return {}, "invalid PR list response" end
   local out = {}
   for _, pr in ipairs(data) do
     table.insert(out, {
@@ -58,7 +68,7 @@ function M.list_prs(_root, remote)
       base_sha = (pr.base and pr.base.sha) or "",
     })
   end
-  return out
+  return out, nil
 end
 
 ---@param _root string
@@ -66,7 +76,7 @@ end
 ---@param number integer|string
 ---@return table|nil, string|nil
 function M.get_pr(_root, remote, number)
-  if not M.available() then return nil, "Forgejo/Codeberg token missing or curl unavailable" end
+  if not M.available(remote) then return nil, "Forgejo/Codeberg token missing or curl unavailable" end
   local pr, err =
     api(remote, "GET", string.format("/repos/%s/%s/pulls/%s", remote.owner, remote.repo, tostring(number)))
   if err then return nil, err end
@@ -90,7 +100,7 @@ end
 ---@param opts { event?: string, body?: string, commit_id?: string, comments?: { path: string, body: string, line?: integer, side?: string, start_line?: integer }[] }
 ---@return boolean, string|nil
 function M.submit_review(_root, remote, number, opts)
-  if not M.available() then return false, "Forgejo/Codeberg token missing or curl unavailable" end
+  if not M.available(remote) then return false, "Forgejo/Codeberg token missing or curl unavailable" end
   opts = opts or {}
   if opts.event == "DRAFT" then return false, "Draft reviews are GitHub-only" end
 
@@ -137,7 +147,7 @@ end
 ---@param number integer|string
 ---@return ForgeRemoteComment[]
 function M.list_review_comments(_, remote, number)
-  if not M.available() then return {} end
+  if not M.available(remote) then return {} end
   local data, err =
     api(remote, "GET", string.format("/repos/%s/%s/pulls/%s/comments", remote.owner, remote.repo, tostring(number)))
   if err or type(data) ~= "table" then return {} end

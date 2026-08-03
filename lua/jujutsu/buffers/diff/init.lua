@@ -133,11 +133,15 @@ local function render_panel(view)
       local selected = view.selected_path == file.path
       local reviewed = view.review and view.review.reviewed_files[file.path]
       local mark = reviewed and "✓" or " "
-      local text = string.format("  %s %s %s", mark, file.status, file.path)
+      local status = tostring(file.status or "?")
+      local text = string.format("  %s %s %s", mark, status, file.path)
+      local status_col = 2 + #mark + 1
+      local path_col = status_col + #status + 1
+      local status_hl = require("jujutsu.hl").file_status(status)
       local hls = {
-        { col = 2, end_col = 3, hl = reviewed and "JujutsuReviewReviewed" or "JujutsuSubtle" },
-        { col = 4, end_col = 5, hl = "JujutsuDiffHeader" },
-        { col = 6, end_col = #text, hl = "Normal" },
+        { col = 2, end_col = 2 + #mark, hl = reviewed and "JujutsuReviewReviewed" or "JujutsuSubtle" },
+        { col = status_col, end_col = status_col + #status, hl = status_hl },
+        { col = path_col, end_col = #text, hl = "JujutsuFilePath" },
       }
       if selected then table.insert(hls, { line_hl = "CursorLine" }) end
       add(text, file, hls)

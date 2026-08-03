@@ -1,4 +1,5 @@
 local bitbucket = require("jujutsu.forge.bitbucket")
+local credentials = require("jujutsu.forge.credentials")
 local forgejo = require("jujutsu.forge.forgejo")
 local github = require("jujutsu.forge.github")
 local gitlab = require("jujutsu.forge.gitlab")
@@ -25,18 +26,63 @@ end
 ---@return boolean
 function M.available(remote)
   local mod = backend(remote)
-  return mod ~= nil and mod.available()
+  if not mod then return false end
+  if remote and (remote.provider == "bitbucket" or remote.provider == "forgejo") then
+    return mod.available(remote)
+  end
+  return mod.available()
 end
+
+---True when the provider can reach the forge once credentials exist (curl/gh/glab).
+---@param remote ForgeRemote|nil
+---@return boolean
+function M.transport_available(remote)
+  local mod = backend(remote)
+  if not mod then return false end
+  if remote and remote.provider == "bitbucket" then return vim.fn.executable("curl") == 1 end
+  if remote and remote.provider == "forgejo" then return vim.fn.executable("curl") == 1 end
+  return mod.available()
+end
+
+---Prompt/store credentials when missing for Bitbucket / Forgejo.
+---@param remote ForgeRemote
+---@param cb fun(ok: boolean)
+function M.ensure_auth(remote, cb)
+  if not remote then
+    cb(false)
+    return
+  end
+  if remote.provider ~= "bitbucket" and remote.provider ~= "forgejo" then
+    cb(M.available(remote))
+    return
+  end
+  if not M.transport_available(remote) then
+    cb(false)
+    return
+  end
+  credentials.ensure(remote, cb)
+end
+
+---Offer update/delete after an auth failure; cb(true) if credentials were updated.
+---@param remote ForgeRemote
+---@param cb fun(retried: boolean)
+function M.handle_auth_failure(remote, cb)
+  credentials.handle_invalid(remote, function(action) cb(action == "updated") end)
+end
+
+---@param err string|nil
+---@return boolean
+function M.is_auth_error(err) return credentials.is_auth_error(err) end
 
 ---@param root string
 ---@param remote? ForgeRemote
 -- luacheck: ignore 631
----@return { number: integer, title: string, url: string, head_ref: string, base_ref: string, head_sha: string, base_sha: string }[]
+---@return { number: integer, title: string, url: string, head_ref: string, base_ref: string, head_sha: string, base_sha: string }[], string|nil
 function M.list_prs(root, remote)
   remote = remote or remote_mod.detect(root)
   local mod = backend(remote)
-  if not mod or not remote then return {} end
-  if remote.provider == "github" then return mod.list_prs(root) end
+  if not mod or not remote then return {}, "No forge provider for this repository" end
+  if remote.provider == "github" then return mod.list_prs(root), nil end
   return mod.list_prs(root, remote)
 end
 
