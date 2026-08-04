@@ -211,11 +211,14 @@ function M.list_review_comments(root, remote, number)
         local pos = note.position
         if type(pos) == "table" then
           path = pos.new_path or pos.old_path
-          if pos.new_line and pos.new_line ~= vim.NIL then
-            line = pos.new_line
+          if path == vim.NIL then path = nil end
+          local new_line = threads.as_line(pos.new_line)
+          local old_line = threads.as_line(pos.old_line)
+          if new_line then
+            line = new_line
             side = "RIGHT"
-          elseif pos.old_line and pos.old_line ~= vim.NIL then
-            line = pos.old_line
+          elseif old_line then
+            line = old_line
             side = "LEFT"
           end
         end
@@ -236,7 +239,7 @@ function M.list_review_comments(root, remote, number)
             id = id,
             path = path,
             side = side,
-            line = tonumber(line) or line,
+            line = line,
             body = note.body or "",
             author = (note.author and (note.author.username or note.author.name)) or "unknown",
             outdated = type(pos) == "table" and pos.outdated == true,

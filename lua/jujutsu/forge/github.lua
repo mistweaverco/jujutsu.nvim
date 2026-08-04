@@ -271,7 +271,9 @@ function M.list_review_comments(root, remote, number)
 
   local out = {}
   for _, c in ipairs(data) do
-    local line = c.line or c.original_line
+    -- JSON null → vim.NIL (truthy); fall through to original_line for outdated comments.
+    local line = threads.as_line(c.line) or threads.as_line(c.original_line)
+    local start_line = threads.as_line(c.start_line) or threads.as_line(c.original_start_line)
     local path = c.path
     local parent_id = nil
     if c.in_reply_to_id then parent_id = threads.remote_id(c.in_reply_to_id) end
@@ -282,11 +284,11 @@ function M.list_review_comments(root, remote, number)
         id = threads.remote_id(c.id),
         path = path,
         side = side,
-        line = tonumber(line) or line,
-        start_line = c.start_line or c.original_start_line,
+        line = line,
+        start_line = start_line,
         body = c.body or "",
         author = (c.user and (c.user.login or c.user.name)) or "unknown",
-        outdated = c.line == nil and c.original_line ~= nil,
+        outdated = threads.as_line(c.line) == nil and threads.as_line(c.original_line) ~= nil,
         url = c.html_url,
         remote = true,
         kind = "line",
@@ -302,7 +304,7 @@ function M.list_review_comments(root, remote, number)
         id = threads.remote_id(c.id),
         path = path,
         side = c.side or "RIGHT",
-        line = line and (tonumber(line) or line) or nil,
+        line = line,
         body = c.body or "",
         author = (c.user and (c.user.login or c.user.name)) or "unknown",
         outdated = true,
@@ -320,7 +322,7 @@ function M.list_review_comments(root, remote, number)
   threads.inherit_locations(out)
   local filtered = {}
   for _, c in ipairs(out) do
-    if c.path and c.line then table.insert(filtered, c) end
+    if c.path and threads.as_line(c.line) then table.insert(filtered, c) end
   end
   return filtered
 end

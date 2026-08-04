@@ -152,18 +152,22 @@ function M.list_review_comments(_, remote, number)
   if err or type(data) ~= "table" then return {} end
   local out = {}
   for _, c in ipairs(data) do
-    local line = c.position or c.line or c.new_position or c.new_line or c.old_line
+    local line = threads.as_line(c.position)
+      or threads.as_line(c.line)
+      or threads.as_line(c.new_position)
+      or threads.as_line(c.new_line)
+      or threads.as_line(c.old_line)
     local path = c.path
     local parent_raw = c.reply_to_comment_id or c.in_reply_to_id or c.in_reply_to
-    local parent_id = parent_raw and parent_raw ~= 0 and threads.remote_id(parent_raw) or nil
+    local parent_id = parent_raw and parent_raw ~= 0 and parent_raw ~= vim.NIL and threads.remote_id(parent_raw) or nil
     if path and line and line ~= 0 then
       local side = "RIGHT"
-      if c.old_line and (not c.new_line or c.new_line == 0) then side = "LEFT" end
+      if threads.as_line(c.old_line) and not threads.as_line(c.new_line) then side = "LEFT" end
       table.insert(out, {
         id = threads.remote_id(c.id),
         path = path,
         side = side,
-        line = tonumber(line) or line,
+        line = line,
         body = c.body or "",
         author = (c.user and (c.user.login or c.user.username)) or "unknown",
         outdated = false,
@@ -181,7 +185,7 @@ function M.list_review_comments(_, remote, number)
         id = threads.remote_id(c.id),
         path = path,
         side = "RIGHT",
-        line = (line and line ~= 0) and (tonumber(line) or line) or nil,
+        line = (line and line ~= 0) and line or nil,
         body = c.body or "",
         author = (c.user and (c.user.login or c.user.username)) or "unknown",
         outdated = false,
@@ -199,7 +203,7 @@ function M.list_review_comments(_, remote, number)
   threads.inherit_locations(out)
   local filtered = {}
   for _, c in ipairs(out) do
-    if c.path and c.line then table.insert(filtered, c) end
+    if c.path and threads.as_line(c.line) then table.insert(filtered, c) end
   end
   return filtered
 end

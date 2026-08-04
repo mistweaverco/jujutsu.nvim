@@ -19,10 +19,10 @@ local function by_line(comments, path, side)
   local map = {}
   for _, c in ipairs(comments) do
     local kind = c.kind or "line"
-    if c.path == path and (kind == "line" or kind == "range") and c.line then
+    local line = threads.as_line(c.line)
+    if c.path == path and (kind == "line" or kind == "range") and line then
       local cside = c.side or "RIGHT"
       if cside == side then
-        local line = tonumber(c.line) or c.line
         map[line] = map[line] or {}
         table.insert(map[line], c)
       end
@@ -308,7 +308,7 @@ local function parts_for(c, opts)
   local header = { { header_lead, body_hl }, { name, author_hl } }
   local when = format_comment_time(c)
   if when ~= "" then
-    table.insert(header, { " · ", "JujutsuSubtle" })
+    table.insert(header, { " · ", "JujutsuReviewHeaderSplitter" })
     table.insert(header, { when, "JujutsuReviewDate" })
   end
   if c.outdated then table.insert(header, { " (outdated)", "JujutsuSubtle" }) end
@@ -466,10 +466,10 @@ function M.comment_targets(comments, path)
   local line_side = {}
   for _, c in ipairs(comments) do
     local kind = c.kind or "line"
-    if c.path == path and (kind == "line" or kind == "range") and c.line then
+    local line = threads.as_line(c.line)
+    if c.path == path and (kind == "line" or kind == "range") and line then
       local side = c.side or "RIGHT"
       if side ~= "LEFT" and side ~= "RIGHT" then side = "RIGHT" end
-      local line = tonumber(c.line) or c.line
       if not line_side[line] or side == "RIGHT" then line_side[line] = side end
     end
   end

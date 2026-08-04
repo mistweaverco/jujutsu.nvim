@@ -253,12 +253,14 @@ function M.list_review_comments(root, remote, number)
     local inline = c.inline
     if type(inline) == "table" and inline.path then
       path = inline.path
-      if inline.to then
-        side, line = "RIGHT", inline.to
-      elseif inline.from then
-        side, line = "LEFT", inline.from
+      local to = threads.as_line(inline.to)
+      local from = threads.as_line(inline.from)
+      if to then
+        side, line = "RIGHT", to
+      elseif from then
+        side, line = "LEFT", from
       end
-      start_line = inline.start_to or inline.start_from
+      start_line = threads.as_line(inline.start_to) or threads.as_line(inline.start_from)
     end
 
     -- Keep replies without inline so we can inherit location from the parent.
@@ -267,7 +269,7 @@ function M.list_review_comments(root, remote, number)
         id = threads.remote_id(c.id),
         path = path,
         side = side,
-        line = line and (tonumber(line) or line) or nil,
+        line = line,
         start_line = start_line,
         body = body,
         author = author,
@@ -286,7 +288,7 @@ function M.list_review_comments(root, remote, number)
   threads.inherit_locations(out)
   local filtered = {}
   for _, c in ipairs(out) do
-    if c.path and c.line then table.insert(filtered, c) end
+    if c.path and threads.as_line(c.line) then table.insert(filtered, c) end
   end
   return filtered
 end

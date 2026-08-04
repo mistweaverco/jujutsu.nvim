@@ -1,5 +1,15 @@
 local M = {}
 
+---Coerce API/JSON line values. JSON null decodes as vim.NIL (truthy), so treat it as missing.
+---@param v any
+---@return integer|nil
+function M.as_line(v)
+  if v == nil or v == vim.NIL then return nil end
+  local n = tonumber(v)
+  if type(n) ~= "number" then return nil end
+  return math.floor(n)
+end
+
 ---Strip the `remote-` prefix used in DiffView comment ids.
 ---@param id string|integer|nil
 ---@return string|nil
@@ -78,16 +88,18 @@ function M.inherit_locations(items)
     if c.id then by_id[c.id] = c end
   end
   for _, item in ipairs(items) do
-    if item.parent_id and (not item.path or not item.line) then
+    local item_line = M.as_line(item.line)
+    if item.parent_id and (not item.path or not item_line) then
       local cur = by_id[item.parent_id]
       local guard = 0
       while cur and guard < 32 do
         guard = guard + 1
-        if cur.path and cur.line then
+        local cur_line = M.as_line(cur.line)
+        if cur.path and cur_line then
           item.path = item.path or cur.path
-          item.line = item.line or cur.line
+          item.line = item_line or cur_line
           item.side = item.side or cur.side
-          item.start_line = item.start_line or cur.start_line
+          item.start_line = M.as_line(item.start_line) or M.as_line(cur.start_line)
           break
         end
         cur = cur.parent_id and by_id[cur.parent_id] or nil
