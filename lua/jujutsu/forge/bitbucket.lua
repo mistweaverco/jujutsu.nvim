@@ -5,6 +5,32 @@ local M = {}
 
 local API_BASE = "https://api.bitbucket.org/2.0"
 
+---@return ForgeCapabilities
+function M.capabilities()
+  return {
+    prs = {
+      list = true,
+      search = true,
+      create = true,
+      update = true,
+      close = true,
+      merge = true,
+      draft = false,
+      labels = false,
+    },
+    issues = {
+      list = true,
+      search = true,
+      create = true,
+      update = true,
+      close = true,
+      labels = false,
+    },
+    comments = { list = true, create = true, update = true, delete = true },
+    ci = { list = true, cancel = true, trigger = true },
+  }
+end
+
 ---@param remote? { owner: string }
 ---@return string|nil, string|nil, string|nil
 local function resolve(remote)
@@ -45,7 +71,7 @@ local function api(remote, method, path_or_url, body)
     Accept = "application/json",
     ["Content-Type"] = has_body and "application/json" or nil,
   }
-  local res = http.request(method, url, headers, has_body and vim.json.encode(body) or nil)
+  local res = http.request(method, url, headers, has_body and http.encode_json(body) or nil)
   if res.err then return nil, res.err end
   return res.json or {}, nil
 end
@@ -458,6 +484,381 @@ function M.post_reply(_, remote, number, opts)
     content = { raw = body },
     parent = { id = parent },
   })
+  if err then return false, err end
+  return true
+end
+
+---@param _root string
+---@param remote { owner: string, repo: string }
+---@param filter? ForgeSearchFilter
+---@return table[], string|nil
+function M.search_prs(_root, remote, filter)
+  if not M.available(remote) then return {}, "Bitbucket credentials missing or curl unavailable" end
+  filter = filter or {}
+  local state = string.upper(filter.state or "OPEN")
+  if state == "OPENED" then state = "OPEN" end
+  if state == "CLOSED" then state = "DECLINED" end
+  if state == "ALL" then state = nil end
+  local endpoint = string.format(
+    "/repositories/%s/%s/pullrequests?pagelen=%s",
+    remote.owner,
+    remote.repo,
+    tostring(filter.limit or 50)
+  )
+  if state then endpoint = endpoint .. "&state=" .. state end
+  if filter.query and filter.query ~= "" then endpoint = endpoint .. "&q=title~%22" .. filter.query .. "%22" end
+  local values, err = fetch_all(remote, endpoint)
+  if err then return {}, err end
+  local out = {}
+  for _, pr in ipairs(values) do
+    local html = ""
+    if pr.links and pr.links.html and pr.links.html.href then html = pr.links.html.href end
+    table.insert(out, {
+      number = pr.id,
+      title = pr.title or "",
+      url = html,
+      head_ref = (pr.source and pr.source.branch and pr.source.branch.name) or "",
+      base_ref = (pr.destination and pr.destination.branch and pr.destination.branch.name) or "",
+      head_sha = (pr.source and pr.source.commit and pr.source.commit.hash) or "",
+      base_sha = (pr.destination and pr.destination.commit and pr.destination.commit.hash) or "",
+      state = pr.state or "OPEN",
+      kind = "pr",
+    })
+  end
+  return out, nil
+end
+
+---@param _ string
+---@param remote { owner: string, repo: string }
+---@param opts { title: string, body?: string, head?: string, base?: string }
+---@return table|nil, string|nil
+function M.create_pr(_, remote, opts)
+  if not M.available(remote) then return nil, "Bitbucket credentials missing or curl unavailable" end
+  opts = opts or {}
+  if not opts.title or opts.title == "" then return nil, "Title required" end
+  if not opts.head or opts.head == "" then return nil, "head branch required" end
+  local payload = {
+    title = opts.title,
+    description = opts.body or "",
+    source = { branch = { name = opts.head } },
+    destination = { branch = { name = opts.base or "main" } },
+  }
+  local pr, err =
+    api(remote, "POST", string.format("/repositories/%s/%s/pullrequests", remote.owner, remote.repo), payload)
+  if err or type(pr) ~= "table" then return nil, err or "failed to create PR" end
+  local html = ""
+  if pr.links and pr.links.html and pr.links.html.href then html = pr.links.html.href end
+  return {
+    number = pr.id,
+    title = pr.title or opts.title,
+    url = html,
+    head_ref = opts.head,
+    base_ref = opts.base or "main",
+  },
+    nil
+end
+
+---@param _ string
+---@param remote { owner: string, repo: string }
+---@param number integer|string
+---@param opts { title?: string, body?: string }
+---@return boolean, string|nil
+function M.update_pr(_, remote, number, opts)
+  if not M.available(remote) then return false, "Bitbucket credentials missing or curl unavailable" end
+  opts = opts or {}
+  local payload = {}
+  if opts.title then payload.title = opts.title end
+  -- Bitbucket returns description as a rich-text object; updates take a plain string.
+  if opts.body ~= nil then payload.description = opts.body end
+  if next(payload) == nil then return true end
+  local _, err = api(
+    remote,
+    "PUT",
+    string.format("/repositories/%s/%s/pullrequests/%s", remote.owner, remote.repo, tostring(number)),
+    payload
+  )
+  if err then return false, err end
+  return true
+end
+
+---@param _ string
+---@param remote { owner: string, repo: string }
+---@param number integer|string
+---@return boolean, string|nil
+function M.close_pr(_, remote, number)
+  if not M.available(remote) then return false, "Bitbucket credentials missing or curl unavailable" end
+  local _, err = api(
+    remote,
+    "POST",
+    string.format("/repositories/%s/%s/pullrequests/%s/decline", remote.owner, remote.repo, tostring(number)),
+    {}
+  )
+  if err then return false, err end
+  return true
+end
+
+---@param _ string
+---@param remote { owner: string, repo: string }
+---@param number integer|string
+---@param _opts? { method?: string }
+---@return boolean, string|nil
+function M.merge_pr(_, remote, number, _opts)
+  if not M.available(remote) then return false, "Bitbucket credentials missing or curl unavailable" end
+  local _, err = api(
+    remote,
+    "POST",
+    string.format("/repositories/%s/%s/pullrequests/%s/merge", remote.owner, remote.repo, tostring(number)),
+    { close_source_branch = false, merge_strategy = "merge_commit" }
+  )
+  if err then return false, err end
+  return true
+end
+
+---@param _ string
+---@param _ { owner: string, repo: string }
+---@return ForgeLabel[], string|nil
+function M.list_repo_labels(_, _) return {}, nil end
+
+---@param _ string
+---@param remote { owner: string, repo: string }
+---@param filter? ForgeSearchFilter
+---@return table[], string|nil
+function M.search_issues(_, remote, filter)
+  if not M.available(remote) then return {}, "Bitbucket credentials missing or curl unavailable" end
+  filter = filter or {}
+  local endpoint =
+    string.format("/repositories/%s/%s/issues?pagelen=%s", remote.owner, remote.repo, tostring(filter.limit or 50))
+  if filter.state == "open" then
+    endpoint = endpoint .. "&status=new&status=open"
+  elseif filter.state == "closed" then
+    endpoint = endpoint .. "&status=closed&status=resolved"
+  end
+  if filter.query and filter.query ~= "" then endpoint = endpoint .. "&q=title~%22" .. filter.query .. "%22" end
+  local values, err = fetch_all(remote, endpoint)
+  if err then return {}, err end
+  local out = {}
+  for _, issue in ipairs(values) do
+    local html = ""
+    if issue.links and issue.links.html and issue.links.html.href then html = issue.links.html.href end
+    table.insert(out, {
+      number = issue.id,
+      title = issue.title or "",
+      url = html,
+      state = (issue.state and (issue.state.name or issue.state)) or "open",
+      labels = {},
+      kind = "issue",
+      author = (issue.reporter and (issue.reporter.display_name or issue.reporter.nickname)) or "",
+    })
+  end
+  return out, nil
+end
+
+---@param _ string
+---@param remote { owner: string, repo: string }
+---@param opts { title: string, body?: string }
+---@return table|nil, string|nil
+function M.create_issue(_, remote, opts)
+  if not M.available(remote) then return nil, "Bitbucket credentials missing or curl unavailable" end
+  opts = opts or {}
+  if not opts.title or opts.title == "" then return nil, "Title required" end
+  local payload = {
+    title = opts.title,
+    content = { raw = opts.body or "", markup = "markdown" },
+  }
+  local issue, err =
+    api(remote, "POST", string.format("/repositories/%s/%s/issues", remote.owner, remote.repo), payload)
+  if err or type(issue) ~= "table" then return nil, err or "failed to create issue" end
+  local html = ""
+  if issue.links and issue.links.html and issue.links.html.href then html = issue.links.html.href end
+  return {
+    number = issue.id,
+    title = issue.title or opts.title,
+    url = html,
+    kind = "issue",
+  }, nil
+end
+
+---@param _ string
+---@param remote { owner: string, repo: string }
+---@param number integer|string
+---@param opts { title?: string, body?: string, state?: string }
+---@return boolean, string|nil
+function M.update_issue(_, remote, number, opts)
+  if not M.available(remote) then return false, "Bitbucket credentials missing or curl unavailable" end
+  opts = opts or {}
+  local payload = {}
+  if opts.title then payload.title = opts.title end
+  if opts.body ~= nil then payload.content = { raw = opts.body, markup = "markdown" } end
+  if opts.state == "closed" then
+    payload.state = { name = "closed" }
+  elseif opts.state == "open" then
+    payload.state = { name = "open" }
+  end
+  local _, err = api(
+    remote,
+    "PUT",
+    string.format("/repositories/%s/%s/issues/%s", remote.owner, remote.repo, tostring(number)),
+    payload
+  )
+  if err then return false, err end
+  return true
+end
+
+---@param _ string
+---@param remote { owner: string, repo: string }
+---@param number integer|string
+---@return boolean, string|nil
+function M.close_issue(_, remote, number) return M.update_issue(_, remote, number, { state = "closed" }) end
+
+---@param _ string
+---@param remote { owner: string, repo: string }
+---@param number integer|string
+---@param comment_id string|integer
+---@param body string
+---@param opts? { kind?: "issue"|"pr" }
+---@return boolean, string|nil
+function M.update_comment(_, remote, number, comment_id, body, opts)
+  if not M.available(remote) then return false, "Bitbucket credentials missing or curl unavailable" end
+  if not body or vim.trim(body) == "" then return false, "Empty comment" end
+  opts = opts or {}
+  local path
+  if opts.kind == "issue" then
+    path = string.format(
+      "/repositories/%s/%s/issues/%s/comments/%s",
+      remote.owner,
+      remote.repo,
+      tostring(number),
+      tostring(comment_id)
+    )
+  else
+    path = string.format(
+      "/repositories/%s/%s/pullrequests/%s/comments/%s",
+      remote.owner,
+      remote.repo,
+      tostring(number),
+      tostring(comment_id)
+    )
+  end
+  local _, err = api(remote, "PUT", path, { content = { raw = body } })
+  if err then return false, err end
+  return true
+end
+
+---@param _ string
+---@param remote { owner: string, repo: string }
+---@param number integer|string
+---@param comment_id string|integer
+---@param opts? { kind?: "issue"|"pr" }
+---@return boolean, string|nil
+function M.delete_comment(_, remote, number, comment_id, opts)
+  if not M.available(remote) then return false, "Bitbucket credentials missing or curl unavailable" end
+  opts = opts or {}
+  local path
+  if opts.kind == "issue" then
+    path = string.format(
+      "/repositories/%s/%s/issues/%s/comments/%s",
+      remote.owner,
+      remote.repo,
+      tostring(number),
+      tostring(comment_id)
+    )
+  else
+    path = string.format(
+      "/repositories/%s/%s/pullrequests/%s/comments/%s",
+      remote.owner,
+      remote.repo,
+      tostring(number),
+      tostring(comment_id)
+    )
+  end
+  local _, err = api(remote, "DELETE", path)
+  if err then return false, err end
+  return true
+end
+
+---@param _ string
+---@param remote { owner: string, repo: string }
+---@param opts? { branch?: string, limit?: integer }
+---@return ForgeCiRun[], string|nil
+function M.list_ci_runs(_, remote, opts)
+  if not M.available(remote) then return {}, "Bitbucket credentials missing or curl unavailable" end
+  opts = opts or {}
+  local endpoint = string.format(
+    "/repositories/%s/%s/pipelines/?pagelen=%s&sort=-created_on",
+    remote.owner,
+    remote.repo,
+    tostring(opts.limit or 30)
+  )
+  local values, err = fetch_all(remote, endpoint)
+  if err then return {}, err end
+  local out = {}
+  for _, p in ipairs(values) do
+    local status = (p.state and p.state.name) or ""
+    local can_cancel = status == "PENDING" or status == "IN_PROGRESS" or status == "QUEUED"
+    local url = ""
+    if p.links and p.links.html and p.links.html.href then url = p.links.html.href end
+    table.insert(out, {
+      id = tostring(p.uuid or p.build_number or ""),
+      name = string.format("pipeline #%s", tostring(p.build_number or p.uuid or "?")),
+      status = status,
+      conclusion = (p.state and p.state.result and p.state.result.name) or status,
+      url = url,
+      can_cancel = can_cancel,
+      branch = p.target and p.target.ref_name,
+      head_sha = p.target and p.target.commit and p.target.commit.hash,
+    })
+  end
+  return out, nil
+end
+
+---@param _ string
+---@param remote { owner: string, repo: string }
+---@param run_id string|integer
+---@return boolean, string|nil
+function M.cancel_ci_run(_, remote, run_id)
+  if not M.available(remote) then return false, "Bitbucket credentials missing or curl unavailable" end
+  local id = tostring(run_id)
+  if not id:match("^{") then id = "{" .. id:gsub("[{}]", "") .. "}" end
+  local _, err = api(
+    remote,
+    "POST",
+    string.format("/repositories/%s/%s/pipelines/%s/stopPipeline", remote.owner, remote.repo, id),
+    {}
+  )
+  if err then return false, err end
+  return true
+end
+
+---@param _ string
+---@param _ { owner: string, repo: string }
+---@return ForgeWorkflow[], string|nil
+function M.list_triggerable_workflows(_, _)
+  return {
+    {
+      id = "pipeline",
+      name = "Run pipeline",
+      can_dispatch = true,
+    },
+  }, nil
+end
+
+---@param _ string
+---@param remote { owner: string, repo: string }
+---@param opts { workflow_id?: string|integer, ref?: string }
+---@return boolean, string|nil
+function M.trigger_ci(_, remote, opts)
+  if not M.available(remote) then return false, "Bitbucket credentials missing or curl unavailable" end
+  opts = opts or {}
+  local ref = opts.ref or "main"
+  local payload = {
+    target = {
+      ref_type = "branch",
+      type = "pipeline_ref_target",
+      ref_name = ref,
+    },
+  }
+  local _, err =
+    api(remote, "POST", string.format("/repositories/%s/%s/pipelines/", remote.owner, remote.repo), payload)
   if err then return false, err end
   return true
 end

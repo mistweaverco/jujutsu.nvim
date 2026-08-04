@@ -1,7 +1,34 @@
 local credentials = require("jujutsu.forge.credentials")
 local http = require("jujutsu.forge.http")
+local labels_mod = require("jujutsu.forge.labels")
 
 local M = {}
+
+---@return ForgeCapabilities
+function M.capabilities()
+  return {
+    prs = {
+      list = true,
+      search = true,
+      create = true,
+      update = true,
+      close = true,
+      merge = true,
+      draft = true,
+      labels = true,
+    },
+    issues = {
+      list = true,
+      search = true,
+      create = true,
+      update = true,
+      close = true,
+      labels = true,
+    },
+    comments = { list = true, create = true, update = true, delete = true },
+    ci = { list = true, cancel = true, trigger = true },
+  }
+end
 
 ---@param remote? { host: string }
 ---@return string|nil, string|nil
@@ -39,7 +66,7 @@ local function api(remote, method, path, body)
     Accept = "application/json",
     ["Content-Type"] = body and "application/json" or nil,
   }
-  local res = http.request(method, url, headers, body and vim.json.encode(body) or nil)
+  local res = http.request(method, url, headers, body and http.encode_json(body) or nil)
   if res.err then return nil, res.err end
   return res.json or {}, nil
 end
@@ -209,19 +236,8 @@ function M.list_review_comments(_, remote, number)
 end
 
 ---@param labels any
----@return string[]
-local function map_labels(labels)
-  local out = {}
-  if type(labels) ~= "table" then return out end
-  for _, l in ipairs(labels) do
-    if type(l) == "string" then
-      table.insert(out, l)
-    elseif type(l) == "table" then
-      table.insert(out, l.name or l.title or tostring(l.id or "?"))
-    end
-  end
-  return out
-end
+---@return ForgeLabel[]
+local function map_labels(labels) return labels_mod.map(labels, { github = true }) end
 
 ---@param users any
 ---@return string[]
@@ -352,6 +368,391 @@ function M.post_reply(_root, remote, number, opts)
     "POST",
     string.format("/repos/%s/%s/pulls/%s/comments", remote.owner, remote.repo, tostring(number)),
     { body = body, reply_to_comment_id = parent }
+  )
+  if err then return false, err end
+  return true
+end
+
+---@param s string
+---@return string
+local function urlencode(s)
+  return (tostring(s):gsub("([^%w%-_%.~])", function(c) return string.format("%%%02X", string.byte(c)) end))
+end
+
+---@param _root string
+---@param remote { host: string, owner: string, repo: string }
+---@param filter? ForgeSearchFilter
+---@return table[], string|nil
+function M.search_prs(_root, remote, filter)
+  if not M.available(remote) then return {}, "Forgejo/Codeberg token missing or curl unavailable" end
+  filter = filter or {}
+  local state = filter.state or "open"
+  if state == "all" then state = "all" end
+  local path = string.format(
+    "/repos/%s/%s/pulls?state=%s&limit=%s",
+    remote.owner,
+    remote.repo,
+    state,
+    tostring(filter.limit or 50)
+  )
+  local data, err = api(remote, "GET", path)
+  if err then return {}, err end
+  if type(data) ~= "table" then return {}, nil end
+  local out = {}
+  for _, pr in ipairs(data) do
+    local draft = pr.draft == true
+    if filter.draft == true and not draft then goto continue end
+    if filter.draft == false and draft then goto continue end
+    if filter.query and filter.query ~= "" then
+      local hay = string.lower((pr.title or "") .. " " .. (pr.body or ""))
+      if not hay:find(string.lower(filter.query), 1, true) then goto continue end
+    end
+    table.insert(out, {
+      number = pr.number,
+      title = pr.title or "",
+      url = pr.html_url or "",
+      head_ref = (pr.head and pr.head.ref) or "",
+      base_ref = (pr.base and pr.base.ref) or "",
+      head_sha = (pr.head and pr.head.sha) or "",
+      base_sha = (pr.base and pr.base.sha) or "",
+      draft = draft,
+      state = pr.state or "open",
+      kind = "pr",
+    })
+    ::continue::
+  end
+  return out, nil
+end
+
+---@param _root string
+---@param remote { host: string, owner: string, repo: string }
+---@param opts { title: string, body?: string, head?: string, base?: string, draft?: boolean, labels?: string[] }
+---@return table|nil, string|nil
+function M.create_pr(_root, remote, opts)
+  if not M.available(remote) then return nil, "Forgejo/Codeberg token missing or curl unavailable" end
+  opts = opts or {}
+  if not opts.title or opts.title == "" then return nil, "Title required" end
+  if not opts.head or opts.head == "" then return nil, "head branch required" end
+  local payload = {
+    title = opts.title,
+    body = opts.body or "",
+    head = opts.head,
+    base = opts.base or "main",
+  }
+  if opts.draft ~= nil then payload.draft = opts.draft end
+  local pr, err = api(remote, "POST", string.format("/repos/%s/%s/pulls", remote.owner, remote.repo), payload)
+  if err or type(pr) ~= "table" then return nil, err or "failed to create PR" end
+  if opts.labels and #opts.labels > 0 and pr.number then
+    api(
+      remote,
+      "PATCH",
+      string.format("/repos/%s/%s/issues/%s", remote.owner, remote.repo, tostring(pr.number)),
+      { labels = opts.labels }
+    )
+  end
+  return {
+    number = pr.number,
+    title = pr.title or opts.title,
+    url = pr.html_url or "",
+    head_ref = opts.head,
+    base_ref = opts.base or "main",
+  },
+    nil
+end
+
+---@param _root string
+---@param remote { host: string, owner: string, repo: string }
+---@param number integer|string
+---@param opts { title?: string, body?: string, base?: string, draft?: boolean, labels?: string[] }
+---@return boolean, string|nil
+function M.update_pr(_root, remote, number, opts)
+  if not M.available(remote) then return false, "Forgejo/Codeberg token missing or curl unavailable" end
+  opts = opts or {}
+  local payload = {}
+  if opts.title then payload.title = opts.title end
+  if opts.body ~= nil then payload.body = opts.body end
+  if opts.base then payload.base = opts.base end
+  if opts.draft ~= nil then payload.draft = opts.draft end
+  if next(payload) then
+    local _, err =
+      api(remote, "PATCH", string.format("/repos/%s/%s/pulls/%s", remote.owner, remote.repo, tostring(number)), payload)
+    if err then return false, err end
+  end
+  if opts.labels then
+    local _, err = api(
+      remote,
+      "PATCH",
+      string.format("/repos/%s/%s/issues/%s", remote.owner, remote.repo, tostring(number)),
+      { labels = opts.labels }
+    )
+    if err then return false, err end
+  end
+  return true
+end
+
+---@param _root string
+---@param remote { host: string, owner: string, repo: string }
+---@param number integer|string
+---@return boolean, string|nil
+function M.close_pr(_root, remote, number)
+  if not M.available(remote) then return false, "Forgejo/Codeberg token missing or curl unavailable" end
+  local _, err = api(
+    remote,
+    "PATCH",
+    string.format("/repos/%s/%s/pulls/%s", remote.owner, remote.repo, tostring(number)),
+    { state = "closed" }
+  )
+  if err then return false, err end
+  return true
+end
+
+---@param _root string
+---@param remote { host: string, owner: string, repo: string }
+---@param number integer|string
+---@param opts? { method?: string }
+---@return boolean, string|nil
+function M.merge_pr(_root, remote, number, opts)
+  if not M.available(remote) then return false, "Forgejo/Codeberg token missing or curl unavailable" end
+  opts = opts or {}
+  local style = "merge"
+  if opts.method == "squash" then
+    style = "squash"
+  elseif opts.method == "rebase" then
+    style = "rebase"
+  end
+  local _, err = api(
+    remote,
+    "POST",
+    string.format("/repos/%s/%s/pulls/%s/merge", remote.owner, remote.repo, tostring(number)),
+    { Do = style }
+  )
+  if err then return false, err end
+  return true
+end
+
+---@param _root string
+---@param remote { host: string, owner: string, repo: string }
+---@return ForgeLabel[], string|nil
+function M.list_repo_labels(_root, remote)
+  if not M.available(remote) then return {}, "Forgejo/Codeberg token missing or curl unavailable" end
+  local data, err = api(remote, "GET", string.format("/repos/%s/%s/labels", remote.owner, remote.repo))
+  if err then return {}, err end
+  if type(data) ~= "table" then return {}, nil end
+  return map_labels(data), nil
+end
+
+---@param _root string
+---@param remote { host: string, owner: string, repo: string }
+---@param filter? ForgeSearchFilter
+---@return table[], string|nil
+function M.search_issues(_root, remote, filter)
+  if not M.available(remote) then return {}, "Forgejo/Codeberg token missing or curl unavailable" end
+  filter = filter or {}
+  local state = filter.state or "open"
+  local path = string.format(
+    "/repos/%s/%s/issues?state=%s&type=issues&limit=%s",
+    remote.owner,
+    remote.repo,
+    state,
+    tostring(filter.limit or 50)
+  )
+  -- Forgejo has no @me
+  if filter.assignee ~= "@me" and filter.assignee and filter.assignee ~= "" then
+    path = path .. "&assigned_by=" .. urlencode(filter.assignee)
+  end
+  if filter.label and filter.label ~= "" then path = path .. "&labels=" .. urlencode(filter.label) end
+  if filter.query and filter.query ~= "" then path = path .. "&q=" .. urlencode(filter.query) end
+  local data, err = api(remote, "GET", path)
+  if err then return {}, err end
+  if type(data) ~= "table" then return {}, nil end
+  local out = {}
+  for _, issue in ipairs(data) do
+    if not issue.pull_request then
+      table.insert(out, {
+        number = issue.number,
+        title = issue.title or "",
+        url = issue.html_url or "",
+        state = issue.state or "open",
+        labels = map_labels(issue.labels),
+        kind = "issue",
+        author = (issue.user and (issue.user.login or issue.user.username)) or "",
+      })
+    end
+  end
+  return out, nil
+end
+
+---@param _root string
+---@param remote { host: string, owner: string, repo: string }
+---@param opts { title: string, body?: string, labels?: string[] }
+---@return table|nil, string|nil
+function M.create_issue(_root, remote, opts)
+  if not M.available(remote) then return nil, "Forgejo/Codeberg token missing or curl unavailable" end
+  opts = opts or {}
+  if not opts.title or opts.title == "" then return nil, "Title required" end
+  local payload = { title = opts.title, body = opts.body or "" }
+  if opts.labels then payload.labels = opts.labels end
+  local issue, err = api(remote, "POST", string.format("/repos/%s/%s/issues", remote.owner, remote.repo), payload)
+  if err or type(issue) ~= "table" then return nil, err or "failed to create issue" end
+  return {
+    number = issue.number,
+    title = issue.title or opts.title,
+    url = issue.html_url or "",
+    kind = "issue",
+  },
+    nil
+end
+
+---@param _root string
+---@param remote { host: string, owner: string, repo: string }
+---@param number integer|string
+---@param opts { title?: string, body?: string, labels?: string[], state?: string }
+---@return boolean, string|nil
+function M.update_issue(_root, remote, number, opts)
+  if not M.available(remote) then return false, "Forgejo/Codeberg token missing or curl unavailable" end
+  opts = opts or {}
+  local payload = {}
+  if opts.title then payload.title = opts.title end
+  if opts.body ~= nil then payload.body = opts.body end
+  if opts.labels then payload.labels = opts.labels end
+  if opts.state then payload.state = opts.state end
+  local _, err =
+    api(remote, "PATCH", string.format("/repos/%s/%s/issues/%s", remote.owner, remote.repo, tostring(number)), payload)
+  if err then return false, err end
+  return true
+end
+
+---@param _ string
+---@param remote { host: string, owner: string, repo: string }
+---@param number integer|string
+---@return boolean, string|nil
+function M.close_issue(_, remote, number) return M.update_issue(_, remote, number, { state = "closed" }) end
+
+---@param _ string
+---@param remote { host: string, owner: string, repo: string }
+---@param _ integer|string
+---@param comment_id string|integer
+---@param body string
+---@return boolean, string|nil
+function M.update_comment(_, remote, _, comment_id, body)
+  if not M.available(remote) then return false, "Forgejo/Codeberg token missing or curl unavailable" end
+  if not body or vim.trim(body) == "" then return false, "Empty comment" end
+  local _, err = api(
+    remote,
+    "PATCH",
+    string.format("/repos/%s/%s/issues/comments/%s", remote.owner, remote.repo, tostring(comment_id)),
+    { body = body }
+  )
+  if err then return false, err end
+  return true
+end
+
+---@param _ string
+---@param remote { host: string, owner: string, repo: string }
+---@param _ integer|string
+---@param comment_id string|integer
+---@return boolean, string|nil
+function M.delete_comment(_, remote, _, comment_id)
+  if not M.available(remote) then return false, "Forgejo/Codeberg token missing or curl unavailable" end
+  local _, err = api(
+    remote,
+    "DELETE",
+    string.format("/repos/%s/%s/issues/comments/%s", remote.owner, remote.repo, tostring(comment_id))
+  )
+  if err then return false, err end
+  return true
+end
+
+---@param _ string
+---@param remote { host: string, owner: string, repo: string }
+---@param opts? { branch?: string, limit?: integer }
+---@return ForgeCiRun[], string|nil
+function M.list_ci_runs(_, remote, opts)
+  if not M.available(remote) then return {}, "Forgejo/Codeberg token missing or curl unavailable" end
+  opts = opts or {}
+  local path =
+    string.format("/repos/%s/%s/actions/runs?limit=%s", remote.owner, remote.repo, tostring(opts.limit or 30))
+  local data, err = api(remote, "GET", path)
+  if err then
+    -- Older Forgejo may lack Actions; degrade gracefully
+    return {}, nil
+  end
+  local runs = {}
+  if type(data) == "table" then
+    if data.workflow_runs then
+      runs = data.workflow_runs
+    elseif data[1] then
+      runs = data
+    end
+  end
+  local out = {}
+  for _, r in ipairs(runs) do
+    local status = r.status or r.state or ""
+    local can_cancel = status == "queued" or status == "running" or status == "in_progress" or status == "waiting"
+    table.insert(out, {
+      id = tostring(r.id),
+      name = r.name or r.title or ("run " .. tostring(r.id)),
+      status = status,
+      conclusion = r.conclusion,
+      url = r.html_url or r.url,
+      can_cancel = can_cancel,
+      branch = r.head_branch or r.ref,
+      head_sha = r.head_sha or r.commit_sha,
+    })
+  end
+  return out, nil
+end
+
+---@param _ string
+---@param remote { host: string, owner: string, repo: string }
+---@param run_id string|integer
+---@return boolean, string|nil
+function M.cancel_ci_run(_, remote, run_id)
+  if not M.available(remote) then return false, "Forgejo/Codeberg token missing or curl unavailable" end
+  local _, err = api(
+    remote,
+    "POST",
+    string.format("/repos/%s/%s/actions/runs/%s/cancel", remote.owner, remote.repo, tostring(run_id))
+  )
+  if err then return false, err end
+  return true
+end
+
+---@param _ string
+---@param remote { host: string, owner: string, repo: string }
+---@return ForgeWorkflow[], string|nil
+function M.list_triggerable_workflows(_, remote)
+  if not M.available(remote) then return {}, "Forgejo/Codeberg token missing or curl unavailable" end
+  local data, err = api(remote, "GET", string.format("/repos/%s/%s/actions/workflows", remote.owner, remote.repo))
+  if err or type(data) ~= "table" then return {}, nil end
+  local workflows = data.workflows or data
+  local out = {}
+  if type(workflows) ~= "table" then return {}, nil end
+  for _, w in ipairs(workflows) do
+    table.insert(out, {
+      id = tostring(w.id or w.name),
+      name = w.name or w.path or tostring(w.id),
+      path = w.path,
+      can_dispatch = true,
+    })
+  end
+  return out, nil
+end
+
+---@param _ string
+---@param remote { host: string, owner: string, repo: string }
+---@param opts { workflow_id: string|integer, ref?: string, inputs?: table }
+---@return boolean, string|nil
+function M.trigger_ci(_, remote, opts)
+  if not M.available(remote) then return false, "Forgejo/Codeberg token missing or curl unavailable" end
+  opts = opts or {}
+  if not opts.workflow_id then return false, "workflow_id required" end
+  local ref = opts.ref or "main"
+  local _, err = api(
+    remote,
+    "POST",
+    string.format("/repos/%s/%s/actions/workflows/%s/dispatches", remote.owner, remote.repo, tostring(opts.workflow_id)),
+    { ref = ref, inputs = opts.inputs or {} }
   )
   if err then return false, err end
   return true

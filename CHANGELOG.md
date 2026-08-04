@@ -1,3 +1,15 @@
+## [Unreleased]
+
+### Features
+
+* **forge:** Magit-style Forge popup (`g`) for PR/issue CRUD, search filters, CI list/cancel/trigger, and review
+* **forge:** colored labels in the conversation panel when the forge provides colors
+* **issue-panel:** edit/delete comments, edit topic, labels, close/merge
+
+### Breaking
+
+* Review entry moved from Diff popup `dR` to Forge popup `g` then `r`
+
 ## [1.6.0](https://github.com/mistweaverco/jujutsu.nvim/compare/v1.5.0...v1.6.0) (2026-07-31)
 
 ### Features

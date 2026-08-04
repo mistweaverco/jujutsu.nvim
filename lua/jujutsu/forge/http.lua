@@ -4,6 +4,15 @@ local M = {}
 ---@return string
 local function one_line(value) return (tostring(value or ""):gsub("[\r\n]+", " | ")) end
 
+---Encode JSON. Empty Lua tables become `{}` (object), not `[]` - Neovim's
+---default `vim.json.encode({})` yields an array and breaks APIs that expect an object.
+---@param value any
+---@return string
+function M.encode_json(value)
+  if type(value) == "table" and next(value) == nil then return "{}" end
+  return vim.json.encode(value)
+end
+
 ---@class ForgeHttpResult
 ---@field body string
 ---@field status integer|nil

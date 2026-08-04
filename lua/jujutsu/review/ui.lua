@@ -2,9 +2,60 @@ local notify = require("jujutsu.notify")
 
 local M = {}
 
+---Reclaim focus for a float that opens after picker/input teardown (status/issue
+---panel often steals WinEnter). Time-boxed like finder.ensure_picker_focus.
+---@param target_win integer
+---@param filetype string
+local function ensure_float_focus(target_win, filetype)
+  local deadline = vim.uv.now() + 1500
+  local group = vim.api.nvim_create_augroup("JujutsuCommentFocus", { clear = true })
+
+  local function focus()
+    if vim.uv.now() > deadline then
+      pcall(vim.api.nvim_del_augroup_by_name, "JujutsuCommentFocus")
+      return false
+    end
+    if target_win and vim.api.nvim_win_is_valid(target_win) then
+      if vim.api.nvim_get_current_win() ~= target_win then pcall(vim.api.nvim_set_current_win, target_win) end
+      local mode = vim.api.nvim_get_mode().mode
+      if not mode:match("^[iR]") then pcall(vim.cmd, "startinsert") end
+      pcall(vim.cmd, "redraw")
+      return true
+    end
+    for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+      if vim.api.nvim_win_is_valid(win) then
+        local buf = vim.api.nvim_win_get_buf(win)
+        if vim.api.nvim_buf_is_valid(buf) and vim.bo[buf].filetype == filetype then
+          pcall(vim.api.nvim_set_current_win, win)
+          local mode = vim.api.nvim_get_mode().mode
+          if not mode:match("^[iR]") then pcall(vim.cmd, "startinsert") end
+          pcall(vim.cmd, "redraw")
+          return true
+        end
+      end
+    end
+    return false
+  end
+
+  vim.api.nvim_create_autocmd({ "WinEnter", "BufWinEnter", "WinNew", "WinLeave" }, {
+    group = group,
+    callback = function() vim.schedule(focus) end,
+  })
+  local delay = 0
+  while delay <= 1500 do
+    if delay == 0 then
+      vim.schedule(focus)
+    else
+      vim.defer_fn(focus, delay)
+    end
+    delay = delay == 0 and 10 or (delay < 100 and delay + 20 or delay + 50)
+  end
+  vim.defer_fn(function() pcall(vim.api.nvim_del_augroup_by_name, "JujutsuCommentFocus") end, 1600)
+end
+
 ---@param title string
----@param opts? { initial?: string }
----@param on_done fun(body: string|nil)
+---@param opts? { initial?: string, allow_empty?: boolean }
+---@param on_done fun(body: string|nil) nil means aborted
 function M.prompt_comment(title, opts, on_done)
   if type(opts) == "function" then
     on_done = opts
@@ -12,6 +63,7 @@ function M.prompt_comment(title, opts, on_done)
   end
   opts = opts or {}
   local initial = opts.initial or ""
+  local allow_empty = opts.allow_empty == true
   local origin_win = vim.api.nvim_get_current_win()
 
   local buf = vim.api.nvim_create_buf(false, true)
@@ -33,8 +85,9 @@ function M.prompt_comment(title, opts, on_done)
   })
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
 
-  local width = math.min(80, math.floor(vim.o.columns * 0.7))
-  local height = math.min(12, math.floor(vim.o.lines * 0.4))
+  -- Prefer a taller float when editing existing (long) bodies.
+  local width = math.min(100, math.floor(vim.o.columns * 0.8))
+  local height = math.min(math.max(16, #body_lines + 4), math.floor(vim.o.lines * 0.7))
   local win = vim.api.nvim_open_win(buf, true, {
     relative = "editor",
     width = width,
@@ -45,9 +98,13 @@ function M.prompt_comment(title, opts, on_done)
     border = "rounded",
     title = " " .. title .. " ",
     title_pos = "center",
-    zindex = 100,
+    -- Above issue panel / status; match finder/input so teardown races don't cover us.
+    zindex = 200,
   })
   vim.api.nvim_win_set_cursor(win, { 1, 0 })
+  -- Stop any leftover finder focus reclaim from fighting for the previous window.
+  pcall(vim.api.nvim_del_augroup_by_name, "JujutsuPickerFocus")
+  ensure_float_focus(win, "jujutsu-review-comment")
   vim.cmd("startinsert")
 
   local done = false
@@ -68,6 +125,7 @@ function M.prompt_comment(title, opts, on_done)
   local function cleanup_and_finish(body)
     if done then return end
     done = true
+    pcall(vim.api.nvim_del_augroup_by_name, "JujutsuCommentFocus")
     -- Never destroy the float/buffer inside BufWriteCmd's call stack - that can
     -- close an underlying DiffView split. Defer cleanup + callback.
     vim.schedule(function()
@@ -87,7 +145,11 @@ function M.prompt_comment(title, opts, on_done)
     callback = function()
       local body = get_body()
       vim.bo[buf].modified = false
-      cleanup_and_finish(body ~= "" and body or nil)
+      if body == "" and not allow_empty then
+        cleanup_and_finish(nil)
+      else
+        cleanup_and_finish(body)
+      end
     end,
   })
 

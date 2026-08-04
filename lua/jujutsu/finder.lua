@@ -1,5 +1,6 @@
 local cli = require("jujutsu.jj.cli")
 local fuzzy = require("jujutsu.buffers.fuzzy_finder")
+local input_buf = require("jujutsu.buffers.input")
 
 local M = {}
 
@@ -33,6 +34,12 @@ end
 ---@field cwd? string
 ---@field refocus_status? boolean
 
+---@class FinderInputOpts
+---@field prompt? string
+---@field default? string
+---@field allow_empty? boolean
+---@field placeholder? string
+
 local function once_cb(cb)
   local settled = false
   return function(item)
@@ -43,9 +50,11 @@ local function once_cb(cb)
   end
 end
 
----Keep reclaiming finder focus for a while (status/popup teardown often steals it).
+---Keep reclaiming finder/input focus for a while (status/popup teardown often steals it).
 ---@param target_win? integer when set, prefer this window id
-local function ensure_picker_focus(target_win)
+---@param filetype? string
+local function ensure_picker_focus(target_win, filetype)
+  filetype = filetype or "jujutsu-finder"
   local deadline = vim.uv.now() + 2000
   local group = vim.api.nvim_create_augroup("JujutsuPickerFocus", { clear = true })
 
@@ -64,13 +73,13 @@ local function ensure_picker_focus(target_win)
     local cur = vim.api.nvim_get_current_win()
     if vim.api.nvim_win_is_valid(cur) then
       local buf = vim.api.nvim_win_get_buf(cur)
-      if vim.api.nvim_buf_is_valid(buf) and vim.bo[buf].filetype == "jujutsu-finder" then return true end
+      if vim.api.nvim_buf_is_valid(buf) and vim.bo[buf].filetype == filetype then return true end
     end
 
     for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
       if vim.api.nvim_win_is_valid(win) then
         local buf = vim.api.nvim_win_get_buf(win)
-        if vim.api.nvim_buf_is_valid(buf) and vim.bo[buf].filetype == "jujutsu-finder" then
+        if vim.api.nvim_buf_is_valid(buf) and vim.bo[buf].filetype == filetype then
           pcall(vim.api.nvim_set_current_win, win)
           pcall(vim.cmd, "redraw")
           return true
@@ -115,7 +124,31 @@ function M.pick(opts)
         allow_multi = opts.allow_multi,
         allow_free_text = opts.allow_free_text,
         on_select = once_cb(cb),
-        on_open = function(win) ensure_picker_focus(win) end,
+        on_open = function(win) ensure_picker_focus(win, "jujutsu-finder") end,
+      })
+    end)
+  end)
+end
+
+---Prompt for a single line of free text (must run inside async.void / a coroutine).
+---Returns nil when aborted; empty string when allow_empty and user confirms empty.
+---@param opts FinderInputOpts
+---@return string|nil
+function M.input(opts)
+  opts = opts or {}
+  if not coroutine.running() then error("jujutsu.finder.input must be called from async.void / a coroutine") end
+
+  local async = require("jujutsu.async")
+  return async.await(function(cb)
+    vim.schedule(function()
+      pcall(vim.cmd, "redraw!")
+      input_buf.open({
+        prompt = opts.prompt,
+        default = opts.default,
+        allow_empty = opts.allow_empty,
+        placeholder = opts.placeholder,
+        on_submit = once_cb(cb),
+        on_open = function(win) ensure_picker_focus(win, "jujutsu-input") end,
       })
     end)
   end)

@@ -47,7 +47,7 @@ end
 ---@param comments ForgeConversationComment[]
 ---@return { topic: ForgeTopic, comments: ForgeConversationComment[] }
 function M.normalize(topic, comments)
-  topic.labels = as_string_list(topic.labels)
+  topic.labels = require("jujutsu.forge.labels").normalize(topic.labels)
   topic.assignees = as_string_list(topic.assignees)
   topic.body = M.as_string(topic.body)
   topic.title = M.as_string(topic.title)

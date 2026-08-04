@@ -236,6 +236,17 @@ function M.issue_panel(opts)
   require("jujutsu.issue_panel").open(opts)
 end
 
+---Open the Magit-style Forge popup (PRs, issues, CI, review).
+---@param opts? { cwd?: string, root?: string }
+function M.forge_popup(opts)
+  ensure_setup()
+  opts = opts or {}
+  local root = opts.root or opts.cwd
+  if opts.cwd and not opts.root then root = cli.find_workspace_root(opts.cwd) or opts.cwd end
+  root = root or require("jujutsu.jj.repository").root() or vim.fn.getcwd()
+  require("jujutsu.popups.forge").create({ root = root })
+end
+
 function M.get_config() return config.values end
 
 M.config = config

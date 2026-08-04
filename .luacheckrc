@@ -4,6 +4,8 @@ stds.nvim = {
 
 std = "lua51+nvim"
 
+max_line_length = false
+
 read_globals = {
   "vim",
   "describe",

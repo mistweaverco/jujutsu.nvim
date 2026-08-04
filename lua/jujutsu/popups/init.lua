@@ -5,6 +5,7 @@ return {
   bookmark = require("jujutsu.popups.bookmark"),
   diff = require("jujutsu.popups.diff"),
   fetch = require("jujutsu.popups.fetch"),
+  forge = require("jujutsu.popups.forge"),
   log = require("jujutsu.popups.log"),
   remote = require("jujutsu.popups.remote"),
   push = require("jujutsu.popups.push"),

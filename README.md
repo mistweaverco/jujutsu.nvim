@@ -111,6 +111,7 @@ jj.annotate()                          -- annotate current buffer at cursor line
 jj.annotate({ path = "src/main.lua", line = 10 })
 jj.review()                            -- pick an open PR/MR and review it
 jj.review({ number = 15 })             -- open a specific PR/MR
+jj.forge_popup()                       -- Magit-style forge hub (PRs, issues, CI)
 jj.issue_panel()                       -- conversation panel (prompt for kind + number)
 jj.issue_panel({ number = 12, kind = "issue" })
 
@@ -118,6 +119,7 @@ jj.issue_panel({ number = 12, kind = "issue" })
 vim.keymap.set("n", "<leader>jc", jj.action("change", "commit"))
 vim.keymap.set("n", "<leader>jb", jj.annotate)
 vim.keymap.set("n", "<leader>jr", jj.review)
+vim.keymap.set("n", "<leader>jg", jj.forge_popup)
 vim.keymap.set("n", "<leader>ji", jj.issue_panel)
 ```
 
@@ -128,6 +130,7 @@ vim.keymap.set("n", "<leader>ji", jj.issue_panel)
 - `bookmark`
 - `diff`
 - `fetch`
+- `forge`
 - `log`
 - `remote`
 - `push`
@@ -154,6 +157,33 @@ lines in the annotate buffer.
 - Magit: Diff popup `da` (file under cursor)
 - Lua: `require("jujutsu").annotate()` (current buffer + cursor line)
 
+## Forge hub (PRs, issues, CI)
+
+Magit-style hub for forge workflows across GitHub, GitLab, Bitbucket, and
+Forgejo/Codeberg. Actions are gated by per-forge capabilities (unsupported
+ops are hidden).
+
+**Entry points**
+
+- Status popup key `g` (ForgePopup)
+- `require("jujutsu").forge_popup()`
+
+**Groups**
+
+| Key | Action |
+|-----|--------|
+| `r` | Review open PR/MR (DiffView) |
+| `p` | Browse / search PRs (filters: state, assignee/author, label, query) |
+| `P` | Create PR (title, body, head/base, draft when supported) |
+| `o` | Open PR by number (conversation panel) |
+| `i` | Browse / search issues |
+| `I` | Create issue |
+| `n` | Open issue/PR by number (prompt) |
+| `c` | List CI runs (open URL / cancel when allowed) |
+| `t` | Trigger workflow / pipeline |
+
+Label colors from the forge (bg/fg) are rendered in the conversation panel.
+
 ## PR / MR review
 
 Tuicr-inspired code review on top of the built-in DiffView (file panel +
@@ -174,7 +204,7 @@ On HTTP 401, review asks whether to supply new credentials or delete the stored 
 
 **Entry points**
 
-- Diff popup `dR` (Review PR/MR)
+- Forge popup `g` → `r` (Review open PR/MR)
 - `require("jujutsu").review()` / `.review({ number = 15 })`
 
 **Review keymaps** (in DiffView review mode)
@@ -228,23 +258,35 @@ issue_panel = {
   max_width = 90,
   position = "right",
   render_markdown = true, -- treesitter-highlight description/comment bodies
-  keymaps = { close = "q", refresh = "r", comment = "c", open = "I", browser = "o" },
+  keymaps = {
+    close = "q",
+    refresh = "r",
+    comment = "c",
+    edit_comment = "e",
+    delete_comment = "x",
+    edit_topic = "E",
+    labels = "l",
+    close_topic = "C",
+    open = "I",
+    browser = "o",
+  },
 },
 ```
 
 ## Issue / PR conversation panel
 
-Full-height right split showing the selected issue or pull request with its conversation (description + chronological comments). Description and comment bodies are highlighted as markdown by default (all forges); author/date headers stay plain. Inline review threads (including nested replies) stay in the DiffView overlays; press `a` on a commented line to reply.
+Full-height right split showing the selected issue or pull request with its conversation (description + chronological comments). Description and comment bodies are highlighted as markdown by default (all forges); author/date headers stay plain. Labels use forge colors when available. Inline review threads (including nested replies) stay in the DiffView overlays; press `a` on a commented line to reply.
 
 **Open from**
 
+- Forge popup `g` (browse / open by number / create)
 - Review DiffView: `I` (configurable via `issue_panel.keymaps.open`)
 - Status / log: `I` - uses the PR number on a PR-annotated bookmark when present, otherwise prompts for kind + number
 - API: `require("jujutsu").issue_panel()` / `.issue_panel({ number = 12, kind = "issue" })`
 
-**Panel keys:** `c` comment · `r` refresh · `o` open in browser · `q` close
+**Panel keys:** `c` comment · `e` edit comment · `x` delete comment · `l` labels · `E` edit title/body · `C` close/merge · `r` refresh · `o` open in browser · `q` close
 
-Works on GitHub (`gh`), GitLab (`glab`), Bitbucket, and Forgejo/Codeberg.
+Works on GitHub (`gh`), GitLab (`glab`), Bitbucket, and Forgejo/Codeberg (capabilities vary; unsupported actions are no-ops with a warning).
 
 In DiffView, `o` is context-aware: file list opens the file at the PR head commit; the side-by-side diff opens the file in the PR at the cursor line.
 
@@ -268,9 +310,9 @@ recent commits, and bookmarks.
 | `dc` | Change history (file under cursor → that path; revision → focus that change; else repo-wide) |
 | `da` | Annotate file under cursor (`jj file annotate` + file history panel) |
 | `dr` | Range side-by-side diff |
-| `dR` | Review open PR/MR (forge) |
 | `dt` | Trunk/main/master..@ side-by-side diff |
 | `f` | Fetch |
+| `g` | Forge (PRs, issues, CI, review) |
 | `l` | Log |
 | `m` | Remote |
 | `p` | Push |

@@ -11,7 +11,9 @@ CONTENTS                                                     *jujutsu-contents*
   6. Integrations ................ |jujutsu-integrations|
   7. Signs ....................... |jujutsu-signs|
   8. Annotate .................... |jujutsu-annotate|
-  9. PR review ................... |jujutsu-review|
+  9. Forge hub ................... |jujutsu-forge|
+ 10. PR review ................... |jujutsu-review|
+ 11. Issue / PR panel ............ |jujutsu-issue-panel|
 
 ==============================================================================
 1. INTRODUCTION                                                 *jujutsu-intro*
@@ -127,6 +129,12 @@ issue_panel({opts?})      Open the Issue/PR conversation side panel.
     kind       "issue"|"pr"     topic kind (default: "pr" when number set)
     cwd/root   string           workspace directory
 
+                                                      *jujutsu.forge_popup()*
+forge_popup({opts?})      Open the Magit-style Forge popup (PRs, issues, CI).
+
+  Options: ~
+    cwd/root   string           workspace directory
+
                                                           *jujutsu.action()*
 action({popup}, {action}, {args?})
                           Return a function that runs a popup action.
@@ -142,7 +150,7 @@ setup({opts})             Configure the plugin.
 Customize via `setup({ mappings = { status = {...}, popup = {...} } })`.
 Set a key to |v:false| to disable it.
 
-Popup keys (defaults): ? b c d f l m p r s u w
+Popup keys (defaults): ? b c d f g l m p r s u w
 
 Status context: D E O B F P S o x  and navigation/fold keys
 (`<tab>` toggles sections, working-copy file diffs, recent-commit
@@ -151,7 +159,10 @@ status, and bookmark commit history).
 Log view: `<cr>` open commit, `S` open `--stat` view, `P` split popup.
 
 Diff popup: `dd` / `dr` / `dt` side-by-side diffsplit; `dc` change history;
-`da` annotate (file under cursor); `dR` review open PR/MR.
+`da` annotate (file under cursor).
+
+Forge popup (`g`): review PRs, browse/create PRs and issues, list/trigger CI
+(see |jujutsu-forge|).
 
 ==============================================================================
 6. INTEGRATIONS                                           *jujutsu-integrations*
@@ -169,8 +180,8 @@ pre-selects that change; with a file under the cursor it scopes history to that
 path; otherwise repo-wide. Opening a change (`<CR>`) uses the same side-by-side
 diff for that revision.
 
-`da` opens annotate for the file under the cursor (see |jujutsu-annotate|).
-`dR` opens PR/MR review (see |jujutsu-review|).
+`da` opens annotate for the file under cursor (see |jujutsu-annotate|).
+`g` opens the Forge popup (see |jujutsu-forge|); review is `g` then `r`.
 
 Forge: when `forge.pr_integration` is true, bookmarks may show PR numbers for
 the detected provider; `o` opens the PR or commit in the browser.
@@ -238,7 +249,31 @@ Highlight groups: `JujutsuAnnotateHash`, `JujutsuAnnotateAuthor`,
 `JujutsuAnnotateDate`, `JujutsuAnnotateCurrent`, `JujutsuAnnotateSelected`.
 
 ==============================================================================
-9. PR REVIEW                                                   *jujutsu-review*
+9. FORGE HUB                                                     *jujutsu-forge*
+
+Magit-style hub for pull requests, issues, and CI across supported forges.
+Actions are shown only when the detected forge reports capability support.
+
+Entry points: ~
+- Status popup key `g` (|ForgePopup|)
+- |jujutsu.forge_popup()|
+
+Popup actions (when available): ~
+  r        review open PR/MR (see |jujutsu-review|)
+  p        browse / search PRs (state, assignee/author, label, query)
+  P        create PR
+  o        open PR by number (conversation panel)
+  i        browse / search issues
+  I        create issue
+  n        open issue/PR by number (prompt)
+  c        list CI runs (open URL / cancel)
+  t        trigger workflow / pipeline
+
+Providers degrade gracefully (e.g. Bitbucket has no labels; draft PRs when
+supported). Label colors from the forge are used in the conversation panel.
+
+==============================================================================
+10. PR REVIEW                                                   *jujutsu-review*
 
 Review open pull / merge requests in the built-in DiffView with local comments,
 markdown yank, and forge submit.
@@ -257,7 +292,7 @@ update or delete stored credentials. Bitbucket approve / request-changes
 needs an Atlassian API token with `write:pullrequest:bitbucket`.
 
 Entry points: ~
-- Diff popup `dR`
+- Forge popup `g` then `r`
 - |jujutsu.review()|
 
 Review DiffView keys: ~
@@ -292,18 +327,25 @@ Sessions are stored under `stdpath("data")/jujutsu/reviews/`.
 Bitbucket / Forgejo credentials under `stdpath("data")/jujutsu/credentials.json`.
 
 ==============================================================================
-10. ISSUE / PR CONVERSATION PANEL                         *jujutsu-issue-panel*
+11. ISSUE / PR CONVERSATION PANEL                         *jujutsu-issue-panel*
 
 Full-height right split with issue or PR details and conversation comments.
 Inline review threads remain in the DiffView overlays.
+Labels render with forge bg/fg colors when provided.
 
 Open: ~
+- Forge popup browse / create / open-by-number
 - Review DiffView `I` (see `issue_panel.keymaps.open`)
 - Status / log `I` (PR on bookmark when present, else prompt)
 - |jujutsu.issue_panel()|
 
 Panel keys: ~
   c        post a comment
+  e        edit comment under cursor
+  x        delete comment under cursor
+  l        set labels (multi-select)
+  E        edit title / body
+  C        close (or merge for PRs)
   r        refresh
   o        open topic in browser
   q        close
@@ -327,6 +369,11 @@ Config (defaults): ~
       close = "q",
       refresh = "r",
       comment = "c",
+      edit_comment = "e",
+      delete_comment = "x",
+      edit_topic = "E",
+      labels = "l",
+      close_topic = "C",
       open = "I",
       browser = "o",
     },

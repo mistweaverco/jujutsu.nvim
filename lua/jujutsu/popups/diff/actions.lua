@@ -100,16 +100,4 @@ function M.external(popup)
   end
 end
 
-function M.review(popup)
-  local root = common.root(popup)
-  -- Close the popup before starting the picker/DiffView so the popup's deferred
-  -- close+refresh cannot steal focus after the review tab opens.
-  if popup and popup.close then popup:close() end
-  -- Hand off on the next tick; review.open starts its own async.void.
-  vim.schedule(function()
-    pcall(vim.cmd, "redraw!")
-    require("jujutsu.review").open({ root = root })
-  end)
-end
-
 return M

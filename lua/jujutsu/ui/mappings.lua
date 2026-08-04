@@ -35,6 +35,7 @@ local popup_module = {
   ChangePopup = "change",
   DiffPopup = "diff",
   FetchPopup = "fetch",
+  ForgePopup = "forge",
   LogPopup = "log",
   RemotePopup = "remote",
   PushPopup = "push",

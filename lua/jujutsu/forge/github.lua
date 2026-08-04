@@ -1,7 +1,41 @@
+local labels_mod = require("jujutsu.forge.labels")
+
 local M = {}
 
 ---@return boolean
 function M.available() return vim.fn.executable("gh") == 1 end
+
+---@param s string
+---@return string
+local function urlencode(s)
+  return (tostring(s):gsub("([^%w%-_%.~])", function(c) return string.format("%%%02X", string.byte(c)) end))
+end
+
+---@return ForgeCapabilities
+function M.capabilities()
+  return {
+    prs = {
+      list = true,
+      search = true,
+      create = true,
+      update = true,
+      close = true,
+      merge = true,
+      draft = true,
+      labels = true,
+    },
+    issues = {
+      list = true,
+      search = true,
+      create = true,
+      update = true,
+      close = true,
+      labels = true,
+    },
+    comments = { list = true, create = true, update = true, delete = true },
+    ci = { list = true, cancel = true, trigger = true },
+  }
+end
 
 ---@param root string
 ---@param args string[]
@@ -12,7 +46,6 @@ local function run(root, args)
 end
 
 ---@param root string
--- luacheck: ignore 631
 ---@return { number: integer, title: string, url: string, head_ref: string, base_ref: string, head_sha: string, base_sha: string }[]
 function M.list_prs(root)
   if not M.available() then return {} end
@@ -347,7 +380,7 @@ local function api_json(root, _, path, method, body)
       .system(vim.list_extend({ "gh" }, vim.list_extend(args, { "--input", "-" })), {
         cwd = root,
         text = true,
-        stdin = vim.json.encode(body),
+        stdin = require("jujutsu.forge.http").encode_json(body),
       })
       :wait()
   else
@@ -367,19 +400,8 @@ local function api_json(root, _, path, method, body)
 end
 
 ---@param labels any
----@return string[]
-local function map_labels(labels)
-  local out = {}
-  if type(labels) ~= "table" then return out end
-  for _, l in ipairs(labels) do
-    if type(l) == "string" then
-      table.insert(out, l)
-    elseif type(l) == "table" and l.name then
-      table.insert(out, l.name)
-    end
-  end
-  return out
-end
+---@return ForgeLabel[]
+local function map_labels(labels) return labels_mod.map(labels, { github = true }) end
 
 ---@param users any
 ---@return string[]
@@ -531,6 +553,395 @@ function M.post_reply(root, remote, number, opts)
   if not parent then return false, "Missing parent comment id" end
   local path = string.format("repos/%s/%s/pulls/%s/comments", remote.owner, remote.repo, tostring(number))
   local _, err = api_json(root, remote, path, "POST", { body = body, in_reply_to = parent })
+  if err then return false, err end
+  return true
+end
+
+---@param filter ForgeSearchFilter
+---@return string
+local function build_pr_search(filter)
+  local parts = {}
+  local state = filter.state or "open"
+  if state == "open" or state == "closed" or state == "merged" then
+    table.insert(parts, "is:" .. state)
+  elseif state ~= "all" then
+    table.insert(parts, "is:open")
+  end
+  table.insert(parts, "is:pr")
+  if filter.assignee == "@me" then
+    table.insert(parts, "assignee:@me")
+  elseif filter.assignee and filter.assignee ~= "" then
+    table.insert(parts, "assignee:" .. filter.assignee)
+  end
+  if filter.author == "@me" then
+    table.insert(parts, "author:@me")
+  elseif filter.author and filter.author ~= "" then
+    table.insert(parts, "author:" .. filter.author)
+  end
+  if filter.draft == true then
+    table.insert(parts, "is:draft")
+  elseif filter.draft == false then
+    table.insert(parts, "-is:draft")
+  end
+  if filter.label and filter.label ~= "" then table.insert(parts, "label:" .. filter.label) end
+  if filter.query and filter.query ~= "" then table.insert(parts, filter.query) end
+  return table.concat(parts, " ")
+end
+
+---@param root string
+---@param _ { owner: string, repo: string }
+---@param filter? ForgeSearchFilter
+---@return table[], string|nil
+function M.search_prs(root, _, filter)
+  if not M.available() then return {}, "gh is not on PATH" end
+  filter = filter or {}
+  local limit = tostring(filter.limit or 50)
+  local search = build_pr_search(filter)
+  local res = run(root, {
+    "pr",
+    "list",
+    "--search",
+    search,
+    "--limit",
+    limit,
+    "--json",
+    "number,title,url,headRefName,baseRefName,headRefOid,baseRefOid,isDraft,state",
+  })
+  if res.code ~= 0 then return {}, res.stderr ~= "" and res.stderr or "failed to search PRs" end
+  local ok, data = pcall(vim.json.decode, res.stdout)
+  if not ok or type(data) ~= "table" then return {}, "invalid PR search JSON" end
+  local out = {}
+  for _, pr in ipairs(data) do
+    table.insert(out, {
+      number = pr.number,
+      title = pr.title or "",
+      url = pr.url or "",
+      head_ref = pr.headRefName or "",
+      base_ref = pr.baseRefName or "",
+      head_sha = pr.headRefOid or "",
+      base_sha = pr.baseRefOid or "",
+      draft = pr.isDraft == true,
+      state = pr.state or "open",
+      kind = "pr",
+    })
+  end
+  return out, nil
+end
+
+---@param root string
+---@param _ { owner: string, repo: string }
+---@param opts { title: string, body?: string, head?: string, base?: string, draft?: boolean, labels?: string[] }
+---@return table|nil, string|nil
+function M.create_pr(root, _, opts)
+  if not M.available() then return nil, "gh is not on PATH" end
+  opts = opts or {}
+  if not opts.title or opts.title == "" then return nil, "Title required" end
+  local args = { "pr", "create", "--title", opts.title, "--body", opts.body or "" }
+  if opts.head and opts.head ~= "" then
+    table.insert(args, "--head")
+    table.insert(args, opts.head)
+  end
+  if opts.base and opts.base ~= "" then
+    table.insert(args, "--base")
+    table.insert(args, opts.base)
+  end
+  if opts.draft then table.insert(args, "--draft") end
+  for _, label in ipairs(opts.labels or {}) do
+    table.insert(args, "--label")
+    table.insert(args, label)
+  end
+  local res = run(root, args)
+  if res.code ~= 0 then return nil, res.stderr ~= "" and res.stderr or "failed to create PR" end
+  local url = vim.trim(res.stdout or "")
+  local number = url:match("/pull/(%d+)")
+  if number then
+    local pr = select(1, M.get_pr(root, number))
+    if pr then return pr, nil end
+    return { number = tonumber(number), title = opts.title, url = url }, nil
+  end
+  return { title = opts.title, url = url }, nil
+end
+
+---@param root string
+---@param remote { owner: string, repo: string }
+---@param number integer|string
+---@param opts { title?: string, body?: string, base?: string, draft?: boolean, labels?: string[] }
+---@return boolean, string|nil
+function M.update_pr(root, remote, number, opts)
+  if not M.available() then return false, "gh is not on PATH" end
+  opts = opts or {}
+  local path = string.format("repos/%s/%s/pulls/%s", remote.owner, remote.repo, tostring(number))
+  local payload = {}
+  if opts.title then payload.title = opts.title end
+  if opts.body ~= nil then payload.body = opts.body end
+  if opts.base then payload.base = opts.base end
+  if opts.draft ~= nil then payload.draft = opts.draft end
+  if next(payload) then
+    local _, err = api_json(root, remote, path, "PATCH", payload)
+    if err then return false, err end
+  end
+  if opts.labels then
+    local issue_path = string.format("repos/%s/%s/issues/%s", remote.owner, remote.repo, tostring(number))
+    local _, err = api_json(root, remote, issue_path, "PATCH", { labels = opts.labels })
+    if err then return false, err end
+  end
+  return true
+end
+
+---@param root string
+---@param _ { owner: string, repo: string }
+---@param number integer|string
+---@return boolean, string|nil
+function M.close_pr(root, _, number)
+  if not M.available() then return false, "gh is not on PATH" end
+  local res = run(root, { "pr", "close", tostring(number) })
+  if res.code ~= 0 then return false, res.stderr ~= "" and res.stderr or "failed to close PR" end
+  return true
+end
+
+---@param root string
+---@param _ { owner: string, repo: string }
+---@param number integer|string
+---@param opts? { method?: string }
+---@return boolean, string|nil
+function M.merge_pr(root, _, number, opts)
+  if not M.available() then return false, "gh is not on PATH" end
+  opts = opts or {}
+  local args = { "pr", "merge", tostring(number) }
+  local method = opts.method or "merge"
+  if method == "squash" then
+    table.insert(args, "--squash")
+  elseif method == "rebase" then
+    table.insert(args, "--rebase")
+  else
+    table.insert(args, "--merge")
+  end
+  local res = run(root, args)
+  if res.code ~= 0 then return false, res.stderr ~= "" and res.stderr or "failed to merge PR" end
+  return true
+end
+
+---@param root string
+---@param remote { owner: string, repo: string }
+---@return ForgeLabel[], string|nil
+function M.list_repo_labels(root, remote)
+  if not M.available() then return {}, "gh is not on PATH" end
+  local path = string.format("repos/%s/%s/labels?per_page=100", remote.owner, remote.repo)
+  local data, err = api_json(root, remote, path)
+  if err then return {}, err end
+  if type(data) ~= "table" then return {}, nil end
+  return map_labels(data), nil
+end
+
+---@param filter ForgeSearchFilter
+---@return string
+local function build_issue_search(filter)
+  local parts = { "is:issue" }
+  local state = filter.state or "open"
+  if state == "open" or state == "closed" then
+    table.insert(parts, "is:" .. state)
+  elseif state ~= "all" then
+    table.insert(parts, "is:open")
+  end
+  if filter.assignee == "@me" then
+    table.insert(parts, "assignee:@me")
+  elseif filter.assignee and filter.assignee ~= "" then
+    table.insert(parts, "assignee:" .. filter.assignee)
+  end
+  if filter.author == "@me" then
+    table.insert(parts, "author:@me")
+  elseif filter.author and filter.author ~= "" then
+    table.insert(parts, "author:" .. filter.author)
+  end
+  if filter.label and filter.label ~= "" then table.insert(parts, "label:" .. filter.label) end
+  if filter.query and filter.query ~= "" then table.insert(parts, filter.query) end
+  return table.concat(parts, " ")
+end
+
+---@param root string
+---@param remote { owner: string, repo: string }
+---@param filter? ForgeSearchFilter
+---@return table[], string|nil
+function M.search_issues(root, remote, filter)
+  if not M.available() then return {}, "gh is not on PATH" end
+  filter = filter or {}
+  local q = string.format("repo:%s/%s %s", remote.owner, remote.repo, build_issue_search(filter))
+  local path = string.format("search/issues?q=%s&per_page=%s", urlencode(q), tostring(filter.limit or 50))
+  local data, err = api_json(root, remote, path)
+  if err then return {}, err end
+  local items = (type(data) == "table" and data.items) or {}
+  local out = {}
+  for _, issue in ipairs(items) do
+    table.insert(out, {
+      number = issue.number,
+      title = issue.title or "",
+      url = issue.html_url or "",
+      state = issue.state or "open",
+      labels = map_labels(issue.labels),
+      kind = "issue",
+      author = (issue.user and issue.user.login) or "",
+    })
+  end
+  return out, nil
+end
+
+---@param root string
+---@param remote { owner: string, repo: string }
+---@param opts { title: string, body?: string, labels?: string[], assignees?: string[] }
+---@return table|nil, string|nil
+function M.create_issue(root, remote, opts)
+  if not M.available() then return nil, "gh is not on PATH" end
+  opts = opts or {}
+  if not opts.title or opts.title == "" then return nil, "Title required" end
+  local path = string.format("repos/%s/%s/issues", remote.owner, remote.repo)
+  local payload = { title = opts.title, body = opts.body or "" }
+  if opts.labels then payload.labels = opts.labels end
+  if opts.assignees then payload.assignees = opts.assignees end
+  local issue, err = api_json(root, remote, path, "POST", payload)
+  if err or type(issue) ~= "table" then return nil, err or "failed to create issue" end
+  return {
+    number = issue.number,
+    title = issue.title or opts.title,
+    url = issue.html_url or "",
+    kind = "issue",
+  },
+    nil
+end
+
+---@param root string
+---@param remote { owner: string, repo: string }
+---@param number integer|string
+---@param opts { title?: string, body?: string, labels?: string[], state?: string }
+---@return boolean, string|nil
+function M.update_issue(root, remote, number, opts)
+  if not M.available() then return false, "gh is not on PATH" end
+  opts = opts or {}
+  local path = string.format("repos/%s/%s/issues/%s", remote.owner, remote.repo, tostring(number))
+  local payload = {}
+  if opts.title then payload.title = opts.title end
+  if opts.body ~= nil then payload.body = opts.body end
+  if opts.labels then payload.labels = opts.labels end
+  if opts.state then payload.state = opts.state end
+  local _, err = api_json(root, remote, path, "PATCH", payload)
+  if err then return false, err end
+  return true
+end
+
+---@param root string
+---@param remote { owner: string, repo: string }
+---@param number integer|string
+---@return boolean, string|nil
+function M.close_issue(root, remote, number) return M.update_issue(root, remote, number, { state = "closed" }) end
+
+---@param root string
+---@param remote { owner: string, repo: string }
+---@param _ integer|string
+---@param comment_id string|integer
+---@param body string
+---@return boolean, string|nil
+function M.update_comment(root, remote, _, comment_id, body)
+  if not M.available() then return false, "gh is not on PATH" end
+  if tostring(comment_id):match("^review%-") then return false, "Review summary comments cannot be edited here" end
+  if not body or vim.trim(body) == "" then return false, "Empty comment" end
+  local path = string.format("repos/%s/%s/issues/comments/%s", remote.owner, remote.repo, tostring(comment_id))
+  local _, err = api_json(root, remote, path, "PATCH", { body = body })
+  if err then return false, err end
+  return true
+end
+
+---@param root string
+---@param remote { owner: string, repo: string }
+---@param _ integer|string
+---@param comment_id string|integer
+---@return boolean, string|nil
+function M.delete_comment(root, remote, _, comment_id)
+  if not M.available() then return false, "gh is not on PATH" end
+  if tostring(comment_id):match("^review%-") then return false, "Review summary comments cannot be deleted here" end
+  local path = string.format("repos/%s/%s/issues/comments/%s", remote.owner, remote.repo, tostring(comment_id))
+  local _, err = api_json(root, remote, path, "DELETE")
+  if err then return false, err end
+  return true
+end
+
+---@param root string
+---@param remote { owner: string, repo: string }
+---@param opts? { branch?: string, limit?: integer }
+---@return ForgeCiRun[], string|nil
+function M.list_ci_runs(root, remote, opts)
+  if not M.available() then return {}, "gh is not on PATH" end
+  opts = opts or {}
+  local path =
+    string.format("repos/%s/%s/actions/runs?per_page=%s", remote.owner, remote.repo, tostring(opts.limit or 30))
+  if opts.branch and opts.branch ~= "" then path = path .. "&branch=" .. urlencode(opts.branch) end
+  local data, err = api_json(root, remote, path)
+  if err then return {}, err end
+  local runs = (type(data) == "table" and data.workflow_runs) or {}
+  local out = {}
+  for _, r in ipairs(runs) do
+    local status = r.status or ""
+    local can_cancel = status == "queued" or status == "in_progress" or status == "waiting" or status == "pending"
+    table.insert(out, {
+      id = tostring(r.id),
+      name = r.name or r.display_title or ("run " .. tostring(r.id)),
+      status = status,
+      conclusion = r.conclusion,
+      url = r.html_url,
+      can_cancel = can_cancel,
+      branch = r.head_branch,
+      head_sha = r.head_sha,
+    })
+  end
+  return out, nil
+end
+
+---@param root string
+---@param remote { owner: string, repo: string }
+---@param run_id string|integer
+---@return boolean, string|nil
+function M.cancel_ci_run(root, remote, run_id)
+  if not M.available() then return false, "gh is not on PATH" end
+  local path = string.format("repos/%s/%s/actions/runs/%s/cancel", remote.owner, remote.repo, tostring(run_id))
+  local _, err = api_json(root, remote, path, "POST", {})
+  if err then return false, err end
+  return true
+end
+
+---@param root string
+---@param remote { owner: string, repo: string }
+---@return ForgeWorkflow[], string|nil
+function M.list_triggerable_workflows(root, remote)
+  if not M.available() then return {}, "gh is not on PATH" end
+  local path = string.format("repos/%s/%s/actions/workflows?per_page=100", remote.owner, remote.repo)
+  local data, err = api_json(root, remote, path)
+  if err then return {}, err end
+  local workflows = (type(data) == "table" and data.workflows) or {}
+  local out = {}
+  for _, w in ipairs(workflows) do
+    if w.state == "active" then
+      table.insert(out, {
+        id = tostring(w.id),
+        name = w.name or w.path or tostring(w.id),
+        path = w.path,
+        can_dispatch = true,
+      })
+    end
+  end
+  return out, nil
+end
+
+---@param root string
+---@param remote { owner: string, repo: string }
+---@param opts { workflow_id: string|integer, ref?: string, inputs?: table }
+---@return boolean, string|nil
+function M.trigger_ci(root, remote, opts)
+  if not M.available() then return false, "gh is not on PATH" end
+  opts = opts or {}
+  if not opts.workflow_id then return false, "workflow_id required" end
+  local ref = opts.ref or "main"
+  local path =
+    string.format("repos/%s/%s/actions/workflows/%s/dispatches", remote.owner, remote.repo, tostring(opts.workflow_id))
+  local payload = { ref = ref, inputs = opts.inputs or {} }
+  local _, err = api_json(root, remote, path, "POST", payload)
   if err then return false, err end
   return true
 end

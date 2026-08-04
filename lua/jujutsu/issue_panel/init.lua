@@ -1,6 +1,7 @@
 local Buffer = require("jujutsu.ui.buffer")
 local async = require("jujutsu.async")
 local config = require("jujutsu.config")
+local finder = require("jujutsu.finder")
 local model = require("jujutsu.issue_panel.model")
 local notify = require("jujutsu.notify")
 local provider = require("jujutsu.forge.provider")
@@ -18,6 +19,7 @@ local M = {}
 ---@field kind "issue"|"pr"
 ---@field topic ForgeTopic|nil
 ---@field comments ForgeConversationComment[]
+---@field comment_ranges { start_line: integer, end_line: integer, comment: ForgeConversationComment }[]
 ---@field closing boolean
 
 ---@type IssuePanelState|nil
@@ -50,10 +52,9 @@ end
 local function paint(state, payload)
   if not state or not state.buf or not vim.api.nvim_buf_is_valid(state.buf.bufnr) then return end
   local markdown = render_markdown_enabled()
-  local lines, highlights = render.build(payload, { markdown = markdown })
+  local lines, highlights, meta = render.build(payload, { markdown = markdown })
+  state.comment_ranges = (meta and meta.comment_ranges) or {}
   Buffer.render(state.buf, lines, highlights)
-  -- Bodies are plain markdown text; headers keep JujutsuIssue* extmarks.
-  -- Start treesitter so all forges get markdown highlighting by default.
   if markdown then
     pcall(vim.treesitter.start, state.buf.bufnr, "markdown")
   else
@@ -65,8 +66,6 @@ local function close_panel()
   if not instance or instance.closing then return end
   local state = instance
   state.closing = true
-  -- Clear before win_close: WinClosed autocmd would otherwise nil `instance`
-  -- while we still need state.buf below.
   instance = nil
   if state.win and vim.api.nvim_win_is_valid(state.win) then
     last_width = vim.api.nvim_win_get_width(state.win)
@@ -114,6 +113,17 @@ local function fetch_and_render(state)
 end
 
 ---@param state IssuePanelState
+---@return ForgeConversationComment|nil
+local function comment_under_cursor(state)
+  if not state.win or not vim.api.nvim_win_is_valid(state.win) then return nil end
+  local row = vim.api.nvim_win_get_cursor(state.win)[1] - 1 -- 0-based
+  for _, range in ipairs(state.comment_ranges or {}) do
+    if row >= range.start_line and row <= range.end_line then return range.comment end
+  end
+  return nil
+end
+
+---@param state IssuePanelState
 local function compose_comment(state)
   require("jujutsu.review.ui").prompt_comment("Comment on #" .. tostring(state.number), {}, function(body)
     if not body or vim.trim(body) == "" then
@@ -139,6 +149,264 @@ local function compose_comment(state)
 end
 
 ---@param state IssuePanelState
+local function edit_comment(state)
+  local caps = provider.capabilities(state.remote)
+  if not caps.comments.update then
+    notify.warn("Editing comments is not supported for " .. state.remote.provider)
+    return
+  end
+  local comment = comment_under_cursor(state)
+  if not comment then
+    notify.warn("Place the cursor on a comment")
+    return
+  end
+  if comment.kind == "review" then
+    notify.warn("Review summary comments cannot be edited here")
+    return
+  end
+  require("jujutsu.review.ui").prompt_comment("Edit comment", { initial = comment.body or "" }, function(body)
+    if not body or vim.trim(body) == "" then
+      notify.warn("Empty comment not saved")
+      return
+    end
+    async.void(function()
+      local ok, err =
+        provider.update_comment(state.root, state.number, comment.id, body, { kind = state.kind }, state.remote)
+      if not ok then
+        notify.error(err or "Failed to update comment")
+        return
+      end
+      notify.info("Comment updated")
+      fetch_and_render(state)
+    end)
+  end)
+end
+
+---@param state IssuePanelState
+local function delete_comment(state)
+  local caps = provider.capabilities(state.remote)
+  if not caps.comments.delete then
+    notify.warn("Deleting comments is not supported for " .. state.remote.provider)
+    return
+  end
+  local comment = comment_under_cursor(state)
+  if not comment then
+    notify.warn("Place the cursor on a comment")
+    return
+  end
+  if comment.kind == "review" then
+    notify.warn("Review summary comments cannot be deleted here")
+    return
+  end
+  async.void(function()
+    pcall(vim.cmd, "redraw!")
+    async.sleep(30)
+    local choice = finder.pick({
+      prompt = "Delete this comment?",
+      entries = { { text = "Delete" }, { text = "Cancel" } },
+    })
+    if choice ~= "Delete" then return end
+    local ok, err = provider.delete_comment(state.root, state.number, comment.id, { kind = state.kind }, state.remote)
+    if not ok then
+      notify.error(err or "Failed to delete comment")
+      return
+    end
+    notify.info("Comment deleted")
+    fetch_and_render(state)
+  end)
+end
+
+---@param state IssuePanelState
+local function edit_topic(state)
+  if not state.topic then return end
+  local caps = provider.capabilities(state.remote)
+  local can = (state.kind == "pr" and caps.prs.update) or (state.kind == "issue" and caps.issues.update)
+  if not can then
+    notify.warn("Updating is not supported for " .. state.remote.provider)
+    return
+  end
+  async.void(function()
+    pcall(vim.cmd, "redraw!")
+    async.sleep(30)
+    local what = finder.pick({
+      prompt = "Edit",
+      entries = {
+        { text = "Title" },
+        { text = "Body" },
+        { text = "Title and body" },
+      },
+    })
+    if not what then return end
+
+    local opts = {}
+    if what == "Title" or what == "Title and body" then
+      local title = finder.input({
+        prompt = "Title",
+        default = state.topic.title or "",
+      })
+      if title == nil then return end
+      opts.title = vim.trim(title)
+      if opts.title == "" then
+        notify.warn("Title cannot be empty")
+        return
+      end
+    end
+
+    local function apply_update()
+      async.void(function()
+        local ok, err
+        if state.kind == "pr" then
+          ok, err = provider.update_pr(state.root, state.number, opts, state.remote)
+        else
+          ok, err = provider.update_issue(state.root, state.number, opts, state.remote)
+        end
+        if not ok then
+          notify.error(err or "Failed to update")
+          return
+        end
+        notify.info("Updated")
+        fetch_and_render(state)
+      end)
+    end
+
+    if what == "Body" or what == "Title and body" then
+      -- Defer past finder focus-reclaim so the compose float keeps focus.
+      vim.defer_fn(function()
+        require("jujutsu.review.ui").prompt_comment("Edit body", {
+          initial = state.topic.body or "",
+          allow_empty = true,
+        }, function(body)
+          -- nil = aborted; do not clear or patch
+          if body == nil then return end
+          opts.body = body
+          apply_update()
+        end)
+      end, 60)
+    else
+      apply_update()
+    end
+  end)
+end
+
+---@param state IssuePanelState
+local function edit_labels(state)
+  local caps = provider.capabilities(state.remote)
+  local can = (state.kind == "pr" and caps.prs.labels) or (state.kind == "issue" and caps.issues.labels)
+  if not can then
+    notify.warn("Labels are not supported for " .. state.remote.provider)
+    return
+  end
+  async.void(function()
+    local labels, err = provider.list_repo_labels(state.root, state.remote)
+    if err then
+      notify.error(err)
+      return
+    end
+    if #labels == 0 then
+      notify.warn("No repository labels found")
+      return
+    end
+    local current = {}
+    for _, l in ipairs(state.topic and state.topic.labels or {}) do
+      current[l.name] = true
+    end
+    local entries = {}
+    for _, lab in ipairs(labels) do
+      local mark = current[lab.name] and "[x] " or "[ ] "
+      table.insert(entries, { text = mark .. lab.name, label = lab })
+    end
+    pcall(vim.cmd, "redraw!")
+    if coroutine.running() then async.sleep(50) end
+    local selected = finder.pick({
+      prompt = "Select labels (space toggle, enter confirm)",
+      entries = entries,
+      allow_multi = true,
+    })
+    if not selected then return end
+    local names = {}
+    local list = type(selected) == "table" and selected or { selected }
+    for _, s in ipairs(list) do
+      local name = tostring(s):gsub("^%[[ x]%]%s*", "")
+      if name ~= "" then table.insert(names, name) end
+    end
+    local ok, uerr
+    if state.kind == "pr" then
+      ok, uerr = provider.update_pr(state.root, state.number, { labels = names }, state.remote)
+    else
+      ok, uerr = provider.update_issue(state.root, state.number, { labels = names }, state.remote)
+    end
+    if not ok then
+      notify.error(uerr or "Failed to update labels")
+      return
+    end
+    notify.info("Labels updated")
+    fetch_and_render(state)
+  end)
+end
+
+---@param state IssuePanelState
+local function close_topic(state)
+  local caps = provider.capabilities(state.remote)
+  if state.kind == "pr" then
+    local choices = {}
+    if caps.prs.close then table.insert(choices, { text = "Close" }) end
+    if caps.prs.merge then table.insert(choices, { text = "Merge" }) end
+    table.insert(choices, { text = "Cancel" })
+    async.void(function()
+      pcall(vim.cmd, "redraw!")
+      async.sleep(30)
+      local choice = finder.pick({ prompt = "PR action", entries = choices })
+      if not choice or choice == "Cancel" then return end
+      if choice == "Close" then
+        local ok, err = provider.close_pr(state.root, state.number, state.remote)
+        if not ok then
+          notify.error(err or "Failed")
+          return
+        end
+        notify.info("Closed")
+        fetch_and_render(state)
+        return
+      end
+      if choice == "Merge" then
+        local method = finder.pick({
+          prompt = "Merge method",
+          entries = { { text = "merge" }, { text = "squash" }, { text = "rebase" } },
+        })
+        if not method then return end
+        local mok, merr = provider.merge_pr(state.root, state.number, { method = method }, state.remote)
+        if not mok then
+          notify.error(merr or "Failed to merge")
+          return
+        end
+        notify.info("Merged")
+        fetch_and_render(state)
+      end
+    end)
+  else
+    if not caps.issues.close then
+      notify.warn("Closing issues is not supported for " .. state.remote.provider)
+      return
+    end
+    async.void(function()
+      pcall(vim.cmd, "redraw!")
+      async.sleep(30)
+      local choice = finder.pick({
+        prompt = "Close this issue?",
+        entries = { { text = "Close" }, { text = "Cancel" } },
+      })
+      if choice ~= "Close" then return end
+      local ok, err = provider.close_issue(state.root, state.number, state.remote)
+      if not ok then
+        notify.error(err or "Failed to close")
+        return
+      end
+      notify.info("Closed")
+      fetch_and_render(state)
+    end)
+  end
+end
+
+---@param state IssuePanelState
 local function bind_keymaps(state)
   local keys = cfg().keymaps or {}
   local map = function(lhs, rhs, desc)
@@ -153,6 +421,11 @@ local function bind_keymaps(state)
   map(keys.close or "q", close_panel, "Close")
   map(keys.refresh or "r", function() fetch_and_render(state) end, "Refresh")
   map(keys.comment or "c", function() compose_comment(state) end, "Comment")
+  map(keys.edit_comment or "e", function() edit_comment(state) end, "EditComment")
+  map(keys.delete_comment or "x", function() delete_comment(state) end, "DeleteComment")
+  map(keys.edit_topic or "E", function() edit_topic(state) end, "EditTopic")
+  map(keys.labels or "l", function() edit_labels(state) end, "Labels")
+  map(keys.close_topic or "C", function() close_topic(state) end, "CloseTopic")
   map(keys.browser or "o", function()
     local url = state.topic and state.topic.url
     if not url or url == "" then url = remote_mod.topic_url(state.remote, state.number, state.kind) end
@@ -195,19 +468,17 @@ local function open_panel(opts)
     number = opts.number,
     kind = opts.kind or "pr",
     comments = {},
+    comment_ranges = {},
     closing = false,
   }
   bind_keymaps(instance)
   paint(instance, { loading = true })
   fetch_and_render(instance)
 
-  -- Only react when *this* panel window closes - a comment float's WinClosed
-  -- would otherwise consume a once=true autocmd and leave a stale instance.
   vim.api.nvim_create_autocmd("WinClosed", {
     pattern = tostring(win),
     once = true,
     callback = function()
-      -- External close (e.g. :q on the panel). close_panel() already cleared instance.
       if instance and instance.win == win then instance = nil end
     end,
   })
@@ -239,15 +510,23 @@ function M.open(opts)
     return
   end
 
-  vim.ui.select({ "pr", "issue" }, {
-    prompt = "Open conversation for",
-    format_item = function(item) return item == "pr" and "Pull request / MR" or "Issue" end,
-  }, function(kind)
+  async.void(function()
+    pcall(vim.cmd, "redraw!")
+    async.sleep(30)
+    local kind = finder.pick({
+      prompt = "Open conversation for",
+      entries = {
+        { text = "Pull request / MR" },
+        { text = "Issue" },
+      },
+    })
     if not kind then return end
-    vim.ui.input({ prompt = string.format("%s number: ", kind == "pr" and "PR/MR" or "Issue") }, function(num)
-      if not num or vim.trim(num) == "" then return end
-      proceed(vim.trim(num), kind)
-    end)
+    local as_kind = kind:find("Issue", 1, true) and "issue" or "pr"
+    local num = finder.input({
+      prompt = (as_kind == "pr" and "PR/MR" or "Issue") .. " number",
+    })
+    if not num or vim.trim(num) == "" then return end
+    proceed(vim.trim(num), as_kind)
   end)
 end
 

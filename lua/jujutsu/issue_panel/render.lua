@@ -58,14 +58,15 @@ end
 
 ---@param data { topic?: ForgeTopic, comments?: ForgeConversationComment[], error?: string, loading?: boolean }
 ---@param opts? { markdown?: boolean }
----@return string[], table[]
+---@return string[], table[], { comment_ranges: table[] }|nil
 function M.build(data, opts)
   opts = opts or {}
   local markdown = opts.markdown ~= false
   local lines, highlights = {}, {}
+  local comment_ranges = {}
   if data.loading then
     push(lines, highlights, "Loading…", "JujutsuSubtle")
-    return lines, highlights
+    return lines, highlights, { comment_ranges = comment_ranges }
   end
   if data.error then
     push(lines, highlights, "Error", "JujutsuConflict")
@@ -73,13 +74,13 @@ function M.build(data, opts)
     for _, line in ipairs(vim.split(tostring(data.error), "\n", { plain = true })) do
       push(lines, highlights, line, "JujutsuSubtle")
     end
-    return lines, highlights
+    return lines, highlights, { comment_ranges = comment_ranges }
   end
 
   local topic = data.topic
   if not topic then
     push(lines, highlights, "No issue/PR selected", "JujutsuSubtle")
-    return lines, highlights
+    return lines, highlights, { comment_ranges = comment_ranges }
   end
 
   local kind_label = topic.kind == "pr" and "Pull request" or "Issue"
@@ -106,7 +107,26 @@ function M.build(data, opts)
   push(lines, highlights, meta, "JujutsuSubtle")
 
   if topic.labels and #topic.labels > 0 then
-    push(lines, highlights, "labels: " .. table.concat(topic.labels, ", "), "JujutsuIssueLabel")
+    local labels_mod = require("jujutsu.forge.labels")
+    local prefix = "labels: "
+    local line = prefix
+    local segs = {}
+    for i, lab in ipairs(topic.labels) do
+      local name = labels_mod.display(lab)
+      if i > 1 then line = line .. " " end
+      local start_col = #line
+      line = line .. name
+      table.insert(segs, {
+        col = start_col,
+        end_col = #line,
+        hl = labels_mod.hl_group(lab),
+      })
+    end
+    table.insert(lines, line)
+    local row = #lines - 1
+    for _, seg in ipairs(segs) do
+      table.insert(highlights, { line = row, col = seg.col, end_col = seg.end_col, hl = seg.hl })
+    end
   end
   if topic.assignees and #topic.assignees > 0 then
     push(lines, highlights, "assignees: " .. table.concat(topic.assignees, ", "), "JujutsuSubtle")
@@ -128,19 +148,29 @@ function M.build(data, opts)
   else
     for i, c in ipairs(comments) do
       if i > 1 then push(lines, highlights, "", nil) end
-      -- Header stays plain (author / association / date) - not markdown.
+      local start_line = #lines
       local assoc = c.author_association and c.author_association ~= "NONE" and (" · " .. c.author_association) or ""
       local kind = c.kind == "review" and " [review]" or ""
       local head = string.format("%s%s%s · %s", c.author or "unknown", assoc, kind, model.format_time(c.created_at))
       push(lines, highlights, head, "JujutsuIssueCommentAuthor")
       push(lines, highlights, string.rep("·", 32), "JujutsuSubtle")
       push_body(lines, highlights, c.body or "", { markdown = markdown })
+      table.insert(comment_ranges, {
+        start_line = start_line,
+        end_line = #lines - 1,
+        comment = c,
+      })
     end
   end
 
   push(lines, highlights, "", nil)
-  push(lines, highlights, "c comment  r refresh  o browser  q close", "JujutsuHint")
-  return lines, highlights
+  push(
+    lines,
+    highlights,
+    "c comment  e edit comment  x delete  l labels  E edit title/body  C close  r refresh  o browser  q close",
+    "JujutsuHint"
+  )
+  return lines, highlights, { comment_ranges = comment_ranges }
 end
 
 return M
