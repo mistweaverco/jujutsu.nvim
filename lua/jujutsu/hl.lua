@@ -173,6 +173,11 @@ function M.setup()
     JujutsuIssueStateClosed = { fg = p.red, bold = p.bold },
     JujutsuIssueStateMerged = { fg = p.purple, bold = p.bold },
     JujutsuIssueStateDraft = { fg = p.grey, bold = p.bold },
+    JujutsuCiSuccess = { fg = p.green, bold = p.bold },
+    JujutsuCiFailure = { fg = p.red, bold = p.bold },
+    JujutsuCiPending = { fg = p.yellow, bold = p.bold },
+    JujutsuCiWarning = { fg = p.orange, bold = p.bold },
+    JujutsuCiId = { fg = p.green },
   }
 
   for name, opts in pairs(groups) do

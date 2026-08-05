@@ -7,15 +7,13 @@ local M = {}
 
 function M.add(popup)
   local root = common.root(popup)
-  vim.ui.input({ prompt = "Remote name: " }, function(name)
-    if not name or name == "" then return end
-    vim.ui.input({ prompt = "Remote URL: " }, function(url)
-      if url and url ~= "" then
-        cli.git_remote_add.args(name, url).call({ cwd = root, hidden = false })
-        require("jujutsu").refresh()
-      end
-    end)
-  end)
+  local name = finder.input({ prompt = "Remote name: " })
+  if not name or name == "" then return end
+  local url = finder.input({ prompt = "Remote URL: " })
+  if url and url ~= "" then
+    cli.git_remote_add.args(name, url).call({ cwd = root, hidden = false })
+    require("jujutsu").refresh()
+  end
 end
 
 function M.remove(popup)
@@ -28,12 +26,11 @@ function M.rename(popup)
   local root = common.root(popup)
   local remote = finder.pick_remote({ prompt = "Rename remote", cwd = root })
   if not remote then return end
-  vim.ui.input({ prompt = "New name: ", default = remote }, function(name)
-    if name and name ~= "" then
-      cli.git_remote_rename.args(remote, name).call({ cwd = root, hidden = false })
-      require("jujutsu").refresh()
-    end
-  end)
+  local name = finder.input({ prompt = "New name: ", default = remote })
+  if name and name ~= "" then
+    cli.git_remote_rename.args(remote, name).call({ cwd = root, hidden = false })
+    require("jujutsu").refresh()
+  end
 end
 
 function M.list(popup)

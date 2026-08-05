@@ -1,6 +1,8 @@
 local Buffer = require("jujutsu.ui.buffer")
+local async = require("jujutsu.async")
 local cli = require("jujutsu.jj.cli")
 local config = require("jujutsu.config")
+local finder = require("jujutsu.finder")
 local split_mod = require("jujutsu.buffers.diff.split")
 local status_data = require("jujutsu.jj.status")
 
@@ -107,10 +109,12 @@ local function close_view()
   end
 
   if instance.review and instance.review.dirty and #(instance.review.comments or {}) > 0 then
-    vim.ui.select({ "Save & close", "Close without saving", "Cancel" }, {
-      prompt = "Unsaved review comments",
-    }, function(choice)
-      if choice == "Cancel" or not choice then return end
+    async.void(function()
+      local choice = finder.pick({
+        prompt = "Unsaved review comments",
+        entries = { "Save & close", "Close without saving", "Cancel" },
+      })
+      if not choice or choice == "Cancel" then return end
       if choice == "Save & close" then require("jujutsu.review.session").save(instance.review) end
       do_close()
     end)
@@ -554,14 +558,18 @@ local function reply_at_cursor(view)
   end
 
   local labels = {}
+  local label_to_candidate = {}
   for _, c in ipairs(candidates) do
     local preview = (c.body or ""):gsub("\n", " ")
     if #preview > 60 then preview = preview:sub(1, 57) .. "..." end
     local depth = c.parent_id and "↳ " or ""
-    table.insert(labels, string.format("%s@%s: %s", depth, c.author or "?", preview))
+    local label = string.format("%s@%s: %s", depth, c.author or "?", preview)
+    table.insert(labels, label)
+    label_to_candidate[label] = c
   end
-  vim.ui.select(labels, { prompt = "Reply to comment" }, function(_, idx)
-    if idx then do_reply(candidates[idx]) end
+  async.void(function()
+    local choice = finder.pick({ prompt = "Reply to comment", entries = labels })
+    if choice then do_reply(label_to_candidate[tostring(choice)]) end
   end)
 end
 

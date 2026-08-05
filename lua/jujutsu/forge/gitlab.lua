@@ -27,7 +27,7 @@ function M.capabilities()
       labels = true,
     },
     comments = { list = true, create = true, update = true, delete = true },
-    ci = { list = true, cancel = true, trigger = true },
+    ci = { list = true, cancel = true, trigger = true, view = true, logs = true },
   }
 end
 
@@ -472,6 +472,75 @@ end
 
 ---@param root string
 ---@param remote { owner: string, repo: string }
+---@param path string
+---@return string|nil, string|nil
+local function project_api_text(root, remote, path)
+  local project = urlencode_path(remote.owner .. "/" .. remote.repo)
+  local endpoint = string.format("projects/%s%s", project, path)
+  local res = run(root, { "api", endpoint })
+  if res.code ~= 0 then return nil, res.stderr ~= "" and res.stderr or res.stdout end
+  return res.stdout or "", nil
+end
+
+---@param secs? number
+---@return string
+local function format_duration_secs(secs)
+  if not secs or secs <= 0 then return "" end
+  secs = math.floor(secs)
+  if secs < 60 then return string.format("%ds", secs) end
+  local mins = math.floor(secs / 60)
+  local rem = secs % 60
+  if mins < 60 then return string.format("%dm%ds", mins, rem) end
+  local hrs = math.floor(mins / 60)
+  mins = mins % 60
+  return string.format("%dh%dm", hrs, mins)
+end
+
+---@param p table
+---@return ForgeCiRun
+local function map_pipeline(p)
+  local status = p.status or ""
+  local can_cancel = status == "running"
+    or status == "pending"
+    or status == "created"
+    or status == "waiting_for_resource"
+  return {
+    id = tostring(p.id),
+    name = string.format("pipeline #%s (%s)", tostring(p.id), p.ref or "?"),
+    title = p.ref or ("pipeline #" .. tostring(p.id)),
+    workflow = "Pipeline",
+    event = p.source or "push",
+    status = status,
+    conclusion = status,
+    url = p.web_url,
+    can_cancel = can_cancel,
+    branch = p.ref,
+    head_sha = p.sha,
+    created_at = p.created_at,
+    updated_at = p.updated_at,
+    started_at = p.created_at,
+    elapsed = format_duration_secs(p.duration),
+  }
+end
+
+---@param j table
+---@return ForgeCiJob
+local function map_gitlab_job(j)
+  return {
+    id = tostring(j.id),
+    name = j.name or ("job " .. tostring(j.id)),
+    status = j.status or "",
+    conclusion = j.status,
+    url = j.web_url,
+    elapsed = format_duration_secs(j.duration),
+    started_at = j.started_at,
+    completed_at = j.finished_at,
+    steps = {},
+  }
+end
+
+---@param root string
+---@param remote { owner: string, repo: string }
 ---@param filter? ForgeSearchFilter
 ---@return table[], string|nil
 function M.search_prs(root, remote, filter)
@@ -734,34 +803,21 @@ end
 ---@param root string
 ---@param remote { owner: string, repo: string }
 ---@param opts? { branch?: string, limit?: integer }
----@return ForgeCiRun[], string|nil
+---@return ForgeCiRun[], string|nil, ForgeCiListMeta|nil
 function M.list_ci_runs(root, remote, opts)
   if not M.available() then return {}, "glab is not on PATH" end
   opts = opts or {}
-  local qs = { "per_page=" .. tostring(opts.limit or 30) }
+  local limit = opts.limit or 20
+  local qs = { "per_page=" .. tostring(limit) }
   if opts.branch and opts.branch ~= "" then table.insert(qs, "ref=" .. opts.branch) end
   local data, err = project_api(root, remote, "GET", "/pipelines?" .. table.concat(qs, "&"))
   if err then return {}, err end
-  if type(data) ~= "table" then return {}, nil end
+  if type(data) ~= "table" then return {}, nil, { has_more = false } end
   local out = {}
   for _, p in ipairs(data) do
-    local status = p.status or ""
-    local can_cancel = status == "running"
-      or status == "pending"
-      or status == "created"
-      or status == "waiting_for_resource"
-    table.insert(out, {
-      id = tostring(p.id),
-      name = string.format("pipeline #%s (%s)", tostring(p.id), p.ref or "?"),
-      status = status,
-      conclusion = status,
-      url = p.web_url,
-      can_cancel = can_cancel,
-      branch = p.ref,
-      head_sha = p.sha,
-    })
+    table.insert(out, map_pipeline(p))
   end
-  return out, nil
+  return out, nil, { has_more = #out >= limit }
 end
 
 ---@param root string
@@ -800,6 +856,54 @@ function M.trigger_ci(root, remote, opts)
   local _, err = project_api(root, remote, "POST", "/pipeline", payload)
   if err then return false, err end
   return true
+end
+
+---@param root string
+---@param remote { owner: string, repo: string }
+---@param run_id string|integer
+---@return ForgeCiRunDetail|nil, string|nil
+function M.get_ci_run(root, remote, run_id)
+  if not M.available() then return nil, "glab is not on PATH" end
+  local pipeline, err = project_api(root, remote, "GET", "/pipelines/" .. tostring(run_id))
+  if err then return nil, err end
+  if type(pipeline) ~= "table" then return nil, "pipeline not found" end
+  local jobs_data, jerr = project_api(root, remote, "GET", "/pipelines/" .. tostring(run_id) .. "/jobs")
+  if jerr then return nil, jerr end
+  local jobs = {}
+  if type(jobs_data) == "table" then
+    for _, j in ipairs(jobs_data) do
+      table.insert(jobs, map_gitlab_job(j))
+    end
+  end
+  return { run = map_pipeline(pipeline), jobs = jobs, annotations = {} }, nil
+end
+
+---@param root string
+---@param remote { owner: string, repo: string }
+---@param run_id string|integer
+---@param job_id string|integer
+---@return ForgeCiJobDetail|nil, string|nil
+function M.get_ci_job(root, remote, run_id, job_id)
+  if not M.available() then return nil, "glab is not on PATH" end
+  local pipeline, err = project_api(root, remote, "GET", "/pipelines/" .. tostring(run_id))
+  if err then return nil, err end
+  local job, jerr = project_api(root, remote, "GET", "/jobs/" .. tostring(job_id))
+  if jerr then return nil, jerr end
+  if type(job) ~= "table" then return nil, "job not found" end
+  return { run = map_pipeline(pipeline or {}), job = map_gitlab_job(job), annotations = {} }, nil
+end
+
+---@param root string
+---@param remote { owner: string, repo: string }
+---@param _run_id string|integer
+---@param job_id string|integer
+---@return string[], string|nil
+function M.get_ci_job_logs(root, remote, _run_id, job_id)
+  if not M.available() then return {}, "glab is not on PATH" end
+  local text, err = project_api_text(root, remote, "/jobs/" .. tostring(job_id) .. "/trace")
+  if err then return {}, err end
+  if not text or text == "" then return { "(empty log)" }, nil end
+  return vim.split(text, "\n", { plain = true }), nil
 end
 
 return M

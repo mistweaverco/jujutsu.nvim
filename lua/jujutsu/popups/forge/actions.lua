@@ -3,7 +3,6 @@ local common = require("jujutsu.popups.common")
 local finder = require("jujutsu.finder")
 local notify = require("jujutsu.notify")
 local provider = require("jujutsu.forge.provider")
-local remote_mod = require("jujutsu.forge.remote")
 
 local M = {}
 
@@ -345,55 +344,7 @@ function M.list_ci(popup)
     return
   end
   close_popup(popup)
-  with_auth(rem, function()
-    run_async(function()
-      local function load()
-        local runs, err = provider.list_ci_runs(root, {}, rem)
-        if err then
-          if on_auth_err(rem, err, load) then return end
-          notify.error(err)
-          return
-        end
-        if #runs == 0 then
-          notify.warn("No CI runs found")
-          return
-        end
-        local entries = {}
-        for _, run in ipairs(runs) do
-          local concl = run.conclusion and ("/" .. run.conclusion) or ""
-          local cancel = run.can_cancel and " [cancellable]" or ""
-          table.insert(entries, {
-            text = string.format("%s  %s%s%s", run.name or run.id, run.status or "?", concl, cancel),
-            run = run,
-          })
-        end
-        local selected = finder.pick({ prompt = "CI runs", entries = entries })
-        if not selected then return end
-        local run
-        for _, e in ipairs(entries) do
-          if e.text == selected then
-            run = e.run
-            break
-          end
-        end
-        if not run then return end
-        local actions = { "Open in browser" }
-        if run.can_cancel then table.insert(actions, "Cancel") end
-        local choice = pick_choice("CI action", actions)
-        if choice == "Open in browser" and run.url then
-          remote_mod.open_url(run.url)
-        elseif choice == "Cancel" then
-          local ok, cerr = provider.cancel_ci_run(root, run.id, rem)
-          if not ok then
-            notify.error(cerr or "Failed to cancel")
-            return
-          end
-          notify.info("CI run cancelled")
-        end
-      end
-      load()
-    end)
-  end)
+  with_auth(rem, function() require("jujutsu.ci_panel").open({ root = root, remote = rem }) end)
 end
 
 function M.trigger_ci(popup)

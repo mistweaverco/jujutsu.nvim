@@ -130,6 +130,18 @@ function M.pick(opts)
   end)
 end
 
+---Yes/No confirmation (must run inside async.void / a coroutine).
+---@param prompt string
+---@param opts? { yes?: string, no?: string }
+---@return boolean
+function M.confirm(prompt, opts)
+  opts = opts or {}
+  local yes = opts.yes or "Yes"
+  local no = opts.no or "No"
+  local choice = M.pick({ prompt = prompt, entries = { yes, no } })
+  return choice == yes
+end
+
 ---Prompt for a single line of free text (must run inside async.void / a coroutine).
 ---Returns nil when aborted; empty string when allow_empty and user confirms empty.
 ---@param opts FinderInputOpts

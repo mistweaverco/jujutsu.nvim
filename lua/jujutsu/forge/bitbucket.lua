@@ -27,7 +27,7 @@ function M.capabilities()
       labels = false,
     },
     comments = { list = true, create = true, update = true, delete = true },
-    ci = { list = true, cancel = true, trigger = true },
+    ci = { list = true, cancel = true, trigger = true, view = true, logs = true },
   }
 end
 
@@ -76,6 +76,151 @@ local function api(remote, method, path_or_url, body)
   return res.json or {}, nil
 end
 
+---Bitbucket step logs are raw octet-stream, not JSON.
+---@param remote { owner: string, repo: string }
+---@param method string
+---@param path_or_url string
+---@param accept? string
+---@return string|nil, string|nil
+local function api_text(remote, method, path_or_url, accept)
+  local user, token, auth_err = resolve(remote)
+  if auth_err then return nil, auth_err end
+  local url = path_or_url
+  if not url:match("^https?://") then
+    if url:sub(1, 1) ~= "/" then url = "/" .. url end
+    url = API_BASE .. url
+  end
+  if type(user) ~= "string" or user == "" or type(token) ~= "string" or token == "" then
+    return nil, "Missing Bitbucket credentials"
+  end
+  local headers = {
+    Authorization = http.basic_auth(user, token),
+    Accept = accept or "*/*",
+  }
+  local res = http.request(method, url, headers, nil, { follow_redirects = true })
+  if res.err then return nil, res.err end
+  return res.body or "", nil
+end
+
+---@param id string|integer
+---@return string
+local function fmt_uuid(id)
+  local s = tostring(id):gsub("[{}]", "")
+  return "{" .. s .. "}"
+end
+
+---URL-encode pipeline UUID for Bitbucket path segments ({uuid} → %7Buuid%7D).
+---@param id string|integer
+---@return string
+local function pipeline_path_id(id)
+  local uuid = fmt_uuid(id)
+  if vim.uri_encode then return vim.uri_encode(uuid) end
+  return uuid:gsub("([^%w%-%.~])", function(c) return string.format("%%%02X", string.byte(c)) end)
+end
+
+---@param target table|nil
+---@return string|nil
+local function target_ref_name(target)
+  if not target or type(target) ~= "table" then return nil end
+  if target.ref_name and target.ref_name ~= "" then return target.ref_name end
+  if target.ref and target.ref ~= "" then return target.ref end
+  if target.selector and target.selector.pattern then return target.selector.pattern end
+  return nil
+end
+
+---@param owner string
+---@param repo string
+---@param build_number? integer|string
+---@param pipeline_uuid? string
+---@return string
+local function pipeline_web_url(owner, repo, build_number, pipeline_uuid)
+  if build_number then
+    return string.format("https://bitbucket.org/%s/%s/pipelines/results/%s", owner, repo, tostring(build_number))
+  end
+  if pipeline_uuid and pipeline_uuid ~= "" then
+    return string.format(
+      "https://bitbucket.org/%s/%s/pipelines/results/%s",
+      owner,
+      repo,
+      pipeline_path_id(pipeline_uuid)
+    )
+  end
+  return ""
+end
+
+---@param owner string
+---@param repo string
+---@param build_number? integer|string
+---@param step_uuid? string
+---@param pipeline_uuid? string
+---@return string
+local function step_web_url(owner, repo, build_number, step_uuid, pipeline_uuid)
+  local base = pipeline_web_url(owner, repo, build_number, pipeline_uuid)
+  if base == "" or not step_uuid or step_uuid == "" then return base end
+  return base .. "/steps/" .. pipeline_path_id(step_uuid)
+end
+
+---@param p table
+---@param remote { owner: string, repo: string }
+---@return ForgeCiRun
+local function map_pipeline(p, remote)
+  local state_name = (p.state and p.state.name) or ""
+  local result_name = (p.state and p.state.result and p.state.result.name) or ""
+  local can_cancel = state_name == "PENDING" or state_name == "IN_PROGRESS" or state_name == "QUEUED"
+  local uuid = p.uuid and tostring(p.uuid):gsub("[{}]", "") or ""
+  local build = p.build_number and tostring(p.build_number) or "?"
+  local branch = target_ref_name(p.target)
+  local title = branch or ("pipeline #" .. build)
+  local url = (p.links and p.links.html and p.links.html.href) or ""
+  if url == "" then url = pipeline_web_url(remote.owner, remote.repo, p.build_number, uuid) end
+  return {
+    id = uuid ~= "" and uuid or tostring(p.build_number or ""),
+    name = string.format("pipeline #%s", build),
+    title = title,
+    workflow = "Pipeline",
+    event = (p.trigger and p.trigger.name) or "push",
+    status = state_name,
+    conclusion = result_name ~= "" and result_name or state_name,
+    url = url,
+    can_cancel = can_cancel,
+    branch = branch,
+    head_sha = p.target and p.target.commit and p.target.commit.hash,
+    created_at = p.created_on,
+    updated_at = p.completed_on,
+    started_at = p.created_on,
+    elapsed = p.duration_in_seconds and (tostring(p.duration_in_seconds) .. "s") or "",
+  }
+end
+
+---@param s table
+---@param remote { owner: string, repo: string }
+---@param pipeline? table
+---@return ForgeCiJob
+local function map_step(s, remote, pipeline)
+  local step_uuid = s.uuid and tostring(s.uuid):gsub("[{}]", "") or ""
+  local url = (s.links and s.links.html and s.links.html.href) or ""
+  if url == "" then
+    url = step_web_url(
+      remote.owner,
+      remote.repo,
+      pipeline and pipeline.build_number,
+      step_uuid,
+      pipeline and pipeline.uuid and tostring(pipeline.uuid):gsub("[{}]", "") or nil
+    )
+  end
+  local state_name = (s.state and s.state.name) or ""
+  local result_name = (s.result and s.result.name) or ((s.state and s.state.result and s.state.result.name) or "")
+  return {
+    id = step_uuid ~= "" and step_uuid or tostring(s.name or "?"),
+    name = s.name or ("step " .. tostring(s.uuid or "?")),
+    status = state_name,
+    conclusion = result_name ~= "" and result_name or state_name,
+    url = url,
+    elapsed = s.duration_in_seconds and (tostring(s.duration_in_seconds) .. "s") or "",
+    steps = {},
+  }
+end
+
 ---@param remote { owner: string, repo: string }
 ---@param url string
 ---@return table[], string|nil
@@ -91,6 +236,61 @@ local function fetch_all(remote, url)
     next_url = type(result.next) == "string" and result.next or ""
   end
   return values, nil
+end
+
+---@param remote { owner: string, repo: string }
+---@param run_id string|integer
+---@return string|nil, string|nil
+local function resolve_pipeline_id(remote, run_id)
+  local id = tostring(run_id):gsub("[{}]", "")
+  if id:match("^[%x%-]+$") and #id >= 32 then return id, nil end
+  if not id:match("^%d+$") then return id, nil end
+  local values, err = fetch_all(
+    remote,
+    string.format("/repositories/%s/%s/pipelines?pagelen=100&sort=-created_on", remote.owner, remote.repo)
+  )
+  if err then return nil, err end
+  for _, p in ipairs(values) do
+    if tostring(p.build_number) == id then
+      local uuid = p.uuid and tostring(p.uuid):gsub("[{}]", "") or ""
+      if uuid ~= "" then return uuid, nil end
+    end
+  end
+  return nil, "pipeline build #" .. id .. " not found"
+end
+
+---@param remote { owner: string, repo: string }
+---@param pipeline_id string
+---@param step_id string
+---@return string[], string|nil
+local function fetch_step_log(remote, pipeline_id, step_id)
+  local endpoint = string.format(
+    "/repositories/%s/%s/pipelines/%s/steps/%s/log",
+    remote.owner,
+    remote.repo,
+    pipeline_path_id(pipeline_id),
+    pipeline_path_id(step_id)
+  )
+  local body, err = api_text(remote, "GET", endpoint)
+  if err then
+    if err:match("HTTP 404") then return { "(empty log)" }, nil end
+    return {}, err
+  end
+  if not body or body == "" then return { "(empty log)" }, nil end
+  if body:sub(-1) == "\n" then body = body:sub(1, -2) end
+  if body == "" then return { "(empty log)" }, nil end
+  return vim.split(body, "\n", { plain = true }), nil
+end
+
+---@param remote { owner: string, repo: string }
+---@param url string
+---@return table[], string|nil, boolean
+local function fetch_page(remote, url)
+  local result, err = api(remote, "GET", url)
+  if err or not result then return {}, err, false end
+  local values = result.values or {}
+  local has_more = type(result.next) == "string" and result.next ~= ""
+  return values, nil, has_more
 end
 
 ---@param _ string
@@ -776,39 +976,41 @@ function M.delete_comment(_, remote, number, comment_id, opts)
   return true
 end
 
+---@param err string|nil
+---@return string|nil
+local function pipeline_err(err)
+  if not err or type(err) ~= "string" then return err end
+  if http.is_scope_error(err) then
+    return err
+      .. "\n\nYour Bitbucket token is valid but missing pipeline scopes."
+      .. "\nCreate a new API token with read:pipeline:bitbucket (Pipelines → Read)."
+      .. "\nFor cancel/trigger, also add write:pipeline:bitbucket."
+      .. "\nBitbucket API tokens do not inherit scopes - Write does not grant Read."
+  end
+  return err
+end
+
 ---@param _ string
 ---@param remote { owner: string, repo: string }
 ---@param opts? { branch?: string, limit?: integer }
----@return ForgeCiRun[], string|nil
+---@return ForgeCiRun[], string|nil, ForgeCiListMeta|nil
 function M.list_ci_runs(_, remote, opts)
   if not M.available(remote) then return {}, "Bitbucket credentials missing or curl unavailable" end
   opts = opts or {}
+  local limit = opts.limit or 20
   local endpoint = string.format(
-    "/repositories/%s/%s/pipelines/?pagelen=%s&sort=-created_on",
+    "/repositories/%s/%s/pipelines?pagelen=%s&sort=-created_on",
     remote.owner,
     remote.repo,
-    tostring(opts.limit or 30)
+    tostring(limit)
   )
-  local values, err = fetch_all(remote, endpoint)
-  if err then return {}, err end
+  local values, err, has_more = fetch_page(remote, endpoint)
+  if err then return {}, pipeline_err(err) end
   local out = {}
   for _, p in ipairs(values) do
-    local status = (p.state and p.state.name) or ""
-    local can_cancel = status == "PENDING" or status == "IN_PROGRESS" or status == "QUEUED"
-    local url = ""
-    if p.links and p.links.html and p.links.html.href then url = p.links.html.href end
-    table.insert(out, {
-      id = tostring(p.uuid or p.build_number or ""),
-      name = string.format("pipeline #%s", tostring(p.build_number or p.uuid or "?")),
-      status = status,
-      conclusion = (p.state and p.state.result and p.state.result.name) or status,
-      url = url,
-      can_cancel = can_cancel,
-      branch = p.target and p.target.ref_name,
-      head_sha = p.target and p.target.commit and p.target.commit.hash,
-    })
+    table.insert(out, map_pipeline(p, remote))
   end
-  return out, nil
+  return out, nil, { has_more = has_more }
 end
 
 ---@param _ string
@@ -817,12 +1019,12 @@ end
 ---@return boolean, string|nil
 function M.cancel_ci_run(_, remote, run_id)
   if not M.available(remote) then return false, "Bitbucket credentials missing or curl unavailable" end
-  local id = tostring(run_id)
-  if not id:match("^{") then id = "{" .. id:gsub("[{}]", "") .. "}" end
+  local pid, perr = resolve_pipeline_id(remote, run_id)
+  if perr then return false, perr end
   local _, err = api(
     remote,
     "POST",
-    string.format("/repositories/%s/%s/pipelines/%s/stopPipeline", remote.owner, remote.repo, id),
+    string.format("/repositories/%s/%s/pipelines/%s/stopPipeline", remote.owner, remote.repo, pipeline_path_id(pid)),
     {}
   )
   if err then return false, err end
@@ -861,6 +1063,69 @@ function M.trigger_ci(_, remote, opts)
     api(remote, "POST", string.format("/repositories/%s/%s/pipelines/", remote.owner, remote.repo), payload)
   if err then return false, err end
   return true
+end
+
+---@param _ string
+---@param remote { owner: string, repo: string }
+---@param run_id string|integer
+---@return ForgeCiRunDetail|nil, string|nil
+function M.get_ci_run(_, remote, run_id)
+  if not M.available(remote) then return nil, "Bitbucket credentials missing or curl unavailable" end
+  local pid, perr = resolve_pipeline_id(remote, run_id)
+  if perr then return nil, pipeline_err(perr) end
+  local path_id = pipeline_path_id(pid)
+  local pipeline, err =
+    api(remote, "GET", string.format("/repositories/%s/%s/pipelines/%s", remote.owner, remote.repo, path_id))
+  if err then return nil, pipeline_err(err) end
+  local steps_data, serr =
+    fetch_all(remote, string.format("/repositories/%s/%s/pipelines/%s/steps", remote.owner, remote.repo, path_id))
+  if serr then return nil, pipeline_err(serr) end
+  local jobs = {}
+  for _, s in ipairs(steps_data) do
+    table.insert(jobs, map_step(s, remote, pipeline))
+  end
+  return { run = map_pipeline(pipeline or {}, remote), jobs = jobs, annotations = {} }, nil
+end
+
+---@param _ string
+---@param remote { owner: string, repo: string }
+---@param run_id string|integer
+---@param job_id string|integer
+---@return ForgeCiJobDetail|nil, string|nil
+function M.get_ci_job(_, remote, run_id, job_id)
+  if not M.available(remote) then return nil, "Bitbucket credentials missing or curl unavailable" end
+  local pid, perr = resolve_pipeline_id(remote, run_id)
+  if perr then return nil, pipeline_err(perr) end
+  local path_id = pipeline_path_id(pid)
+  local pipeline, err =
+    api(remote, "GET", string.format("/repositories/%s/%s/pipelines/%s", remote.owner, remote.repo, path_id))
+  if err then return nil, pipeline_err(err) end
+  local steps, serr =
+    fetch_all(remote, string.format("/repositories/%s/%s/pipelines/%s/steps", remote.owner, remote.repo, path_id))
+  if serr then return nil, pipeline_err(serr) end
+  local job = nil
+  local needle = tostring(job_id):gsub("[{}]", "")
+  for _, s in ipairs(steps) do
+    local sid = tostring(s.uuid or ""):gsub("[{}]", "")
+    if sid == needle or tostring(s.name or "") == tostring(job_id) then
+      job = map_step(s, remote, pipeline)
+      break
+    end
+  end
+  if not job then return nil, "step not found" end
+  return { run = map_pipeline(pipeline or {}, remote), job = job, annotations = {} }, nil
+end
+
+---@param _ string
+---@param remote { owner: string, repo: string }
+---@param run_id string|integer
+---@param job_id string|integer
+---@return string[], string|nil
+function M.get_ci_job_logs(_, remote, run_id, job_id)
+  if not M.available(remote) then return {}, "Bitbucket credentials missing or curl unavailable" end
+  local lines, err = fetch_step_log(remote, tostring(run_id), tostring(job_id))
+  if err then return {}, pipeline_err(err) end
+  return lines, nil
 end
 
 return M

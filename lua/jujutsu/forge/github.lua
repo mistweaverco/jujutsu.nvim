@@ -33,7 +33,7 @@ function M.capabilities()
       labels = true,
     },
     comments = { list = true, create = true, update = true, delete = true },
-    ci = { list = true, cancel = true, trigger = true },
+    ci = { list = true, cancel = true, trigger = true, view = true, logs = true },
   }
 end
 
@@ -863,35 +863,137 @@ function M.delete_comment(root, remote, _, comment_id)
   return true
 end
 
+---@param _ string
+---@param remote { owner: string, repo: string }
+---@return string
+local function repo_flag(_, remote) return remote.owner .. "/" .. remote.repo end
+
+---@param iso? string
+---@return number|nil
+local function parse_time(iso)
+  if not iso or iso == "" then return nil end
+  local y, mo, d, h, mi, s = iso:match("^(%d+)%-(%d+)%-(%d+)T(%d+):(%d+):(%d+)")
+  if y then return nil end
+  if not mo then return nil end
+  if not d then return nil end
+  if not h then return nil end
+  if not mi then return nil end
+  if not s then return nil end
+  return os.time({
+    year = tonumber(y),
+    month = tonumber(mo),
+    day = tonumber(d),
+    hour = tonumber(h),
+    min = tonumber(mi),
+    sec = tonumber(s),
+  })
+end
+
+---@param start_iso? string
+---@param end_iso? string
+---@return string
+local function format_elapsed(start_iso, end_iso)
+  local start_t = parse_time(start_iso)
+  if not start_t then return "" end
+  local end_t = parse_time(end_iso) or os.time()
+  local secs = math.max(0, end_t - start_t)
+  if secs < 60 then return string.format("%ds", secs) end
+  local mins = math.floor(secs / 60)
+  local rem = secs % 60
+  if mins < 60 then return string.format("%dm%ds", mins, rem) end
+  local hrs = math.floor(mins / 60)
+  mins = mins % 60
+  return string.format("%dh%dm", hrs, mins)
+end
+
+---@return ForgeCiRun
+local function map_run(r)
+  local status = r.status or ""
+  local can_cancel = status == "queued"
+    or status == "in_progress"
+    or status == "waiting"
+    or status == "pending"
+    or status == "requested"
+  local started = r.startedAt or r.createdAt
+  local updated = r.updatedAt or r.completedAt
+  return {
+    id = tostring(r.databaseId or r.id),
+    name = r.displayTitle or r.name or ("run " .. tostring(r.databaseId or r.id)),
+    title = r.displayTitle or r.name,
+    workflow = r.workflowName or r.name,
+    event = r.event,
+    status = status,
+    conclusion = r.conclusion,
+    url = r.url or r.html_url,
+    can_cancel = can_cancel,
+    branch = r.headBranch or r.head_branch,
+    head_sha = r.headSha or r.head_sha,
+    created_at = r.createdAt or r.created_at,
+    updated_at = updated,
+    started_at = started,
+    elapsed = format_elapsed(started, updated),
+  }
+end
+
+---@param j table
+---@return ForgeCiJob
+local function map_job(j)
+  local started = j.startedAt or j.started_at
+  local completed = j.completedAt or j.completed_at or j.updatedAt
+  local steps = {}
+  for _, s in ipairs(j.steps or {}) do
+    table.insert(steps, {
+      name = s.name or "?",
+      status = s.status or "",
+      conclusion = s.conclusion,
+      number = s.number,
+    })
+  end
+  return {
+    id = tostring(j.databaseId or j.id),
+    name = j.name or ("job " .. tostring(j.databaseId or j.id)),
+    status = j.status or "",
+    conclusion = j.conclusion,
+    url = j.url or j.html_url,
+    elapsed = format_elapsed(started, completed),
+    started_at = started,
+    completed_at = completed,
+    steps = steps,
+  }
+end
+
 ---@param root string
 ---@param remote { owner: string, repo: string }
 ---@param opts? { branch?: string, limit?: integer }
----@return ForgeCiRun[], string|nil
+---@return ForgeCiRun[], string|nil, ForgeCiListMeta|nil
 function M.list_ci_runs(root, remote, opts)
   if not M.available() then return {}, "gh is not on PATH" end
   opts = opts or {}
-  local path =
-    string.format("repos/%s/%s/actions/runs?per_page=%s", remote.owner, remote.repo, tostring(opts.limit or 30))
-  if opts.branch and opts.branch ~= "" then path = path .. "&branch=" .. urlencode(opts.branch) end
-  local data, err = api_json(root, remote, path)
-  if err then return {}, err end
-  local runs = (type(data) == "table" and data.workflow_runs) or {}
+  local limit = opts.limit or 20
+  local args = {
+    "run",
+    "list",
+    "-R",
+    repo_flag(root, remote),
+    "--json",
+    "databaseId,displayTitle,workflowName,headBranch,event,status,conclusion,createdAt,updatedAt,startedAt,url",
+    "--limit",
+    tostring(limit),
+  }
+  if opts.branch and opts.branch ~= "" then vim.list_extend(args, { "-b", opts.branch }) end
+  local res = run(root, args)
+  if res.code ~= 0 then return {}, res.stderr ~= "" and res.stderr or "gh run list failed" end
+  local ok, data = pcall(vim.json.decode, res.stdout)
+  if not ok or type(data) ~= "table" then return {}, "invalid gh run list JSON" end
   local out = {}
-  for _, r in ipairs(runs) do
-    local status = r.status or ""
-    local can_cancel = status == "queued" or status == "in_progress" or status == "waiting" or status == "pending"
-    table.insert(out, {
-      id = tostring(r.id),
-      name = r.name or r.display_title or ("run " .. tostring(r.id)),
-      status = status,
-      conclusion = r.conclusion,
-      url = r.html_url,
-      can_cancel = can_cancel,
-      branch = r.head_branch,
-      head_sha = r.head_sha,
-    })
+  for _, r in ipairs(data) do
+    local mapped = map_run(r)
+    if mapped.created_at and mapped.created_at ~= "" then
+      mapped.elapsed = mapped.elapsed ~= "" and mapped.elapsed or format_elapsed(mapped.started_at, mapped.updated_at)
+    end
+    table.insert(out, mapped)
   end
-  return out, nil
+  return out, nil, { has_more = #out >= limit }
 end
 
 ---@param root string
@@ -944,6 +1046,208 @@ function M.trigger_ci(root, remote, opts)
   local _, err = api_json(root, remote, path, "POST", payload)
   if err then return false, err end
   return true
+end
+
+---@param root string
+---@param remote { owner: string, repo: string }
+---@param run_id string|integer
+---@return ForgeCiRunDetail|nil, string|nil
+function M.get_ci_run(root, remote, run_id)
+  if not M.available() then return nil, "gh is not on PATH" end
+  local res = run(root, {
+    "run",
+    "view",
+    tostring(run_id),
+    "-R",
+    repo_flag(root, remote),
+    "--json",
+    "databaseId,displayTitle,workflowName,headBranch,event,status,conclusion,createdAt,updatedAt,startedAt,url,jobs",
+  })
+  if res.code ~= 0 then return nil, res.stderr ~= "" and res.stderr or "gh run view failed" end
+  local ok, data = pcall(vim.json.decode, res.stdout)
+  if not ok or type(data) ~= "table" then return nil, "invalid gh run view JSON" end
+  local jobs = {}
+  for _, j in ipairs(data.jobs or {}) do
+    table.insert(jobs, map_job(j))
+  end
+  return { run = map_run(data), jobs = jobs, annotations = {} }, nil
+end
+
+---@param root string
+---@param remote { owner: string, repo: string }
+---@param run_id string|integer
+---@param job_id string|integer
+---@return ForgeCiJobDetail|nil, string|nil
+function M.get_ci_job(root, remote, run_id, job_id)
+  if not M.available() then return nil, "gh is not on PATH" end
+  local run_res = run(root, {
+    "run",
+    "view",
+    tostring(run_id),
+    "-R",
+    repo_flag(root, remote),
+    "--json",
+    "databaseId,displayTitle,workflowName,headBranch,event,status,conclusion,createdAt,updatedAt,startedAt,url,jobs",
+  })
+  if run_res.code ~= 0 then return nil, run_res.stderr ~= "" and run_res.stderr or "gh run view failed" end
+  local ok_run, run_data = pcall(vim.json.decode, run_res.stdout)
+  if not ok_run or type(run_data) ~= "table" then return nil, "invalid gh run view JSON" end
+
+  local needle = tostring(job_id)
+  local job_data = nil
+  for _, j in ipairs(run_data.jobs or {}) do
+    if tostring(j.databaseId or j.id) == needle then
+      job_data = j
+      break
+    end
+  end
+  if not job_data then return nil, "job not found in run " .. tostring(run_id) end
+
+  if not job_data.steps or #job_data.steps == 0 then
+    local api_res = run(root, {
+      "api",
+      string.format("repos/%s/%s/actions/jobs/%s", remote.owner, remote.repo, needle),
+    })
+    if api_res.code == 0 and api_res.stdout ~= "" then
+      local ok_api, api_job = pcall(vim.json.decode, api_res.stdout)
+      if ok_api and type(api_job) == "table" and type(api_job.steps) == "table" then job_data.steps = api_job.steps end
+    end
+  end
+
+  return { run = map_run(run_data), job = map_job(job_data), annotations = {} }, nil
+end
+
+---@param path string
+---@return string
+local function step_name_from_log_file(path)
+  local base = vim.fn.fnamemodify(path, ":t:r")
+  local _, name = base:match("^(%d+)_(.+)$")
+  return name or base
+end
+
+---@param root string
+---@param remote { owner: string, repo: string }
+---@param job_id string|integer
+---@return string|nil tmpdir
+local function fetch_job_log_zip(root, remote, job_id)
+  if vim.fn.executable("unzip") ~= 1 or vim.fn.executable("curl") ~= 1 then return nil end
+  local token_res = run(root, { "auth", "token" })
+  if token_res.code ~= 0 then return nil end
+  local token = vim.trim(token_res.stdout or "")
+  if token == "" then return nil end
+
+  local tmpzip = vim.fn.tempname() .. ".zip"
+  local tmpdir = vim.fn.tempname()
+  vim.fn.mkdir(tmpdir, "p")
+  local url = string.format(
+    "https://api.github.com/repos/%s/%s/actions/jobs/%s/logs",
+    remote.owner,
+    remote.repo,
+    tostring(job_id)
+  )
+  local curl = vim
+    .system({
+      "curl",
+      "-sSL",
+      "-H",
+      "Authorization: Bearer " .. token,
+      "-H",
+      "Accept: application/vnd.github+json",
+      "-o",
+      tmpzip,
+      url,
+    }, { text = true })
+    :wait()
+  if curl.code ~= 0 or vim.fn.filereadable(tmpzip) ~= 1 or vim.fn.getfsize(tmpzip) <= 0 then
+    pcall(vim.fn.delete, tmpzip, "rf")
+    pcall(vim.fn.delete, tmpdir, "rf")
+    return nil
+  end
+  local unzip = vim.system({ "unzip", "-q", "-o", tmpzip, "-d", tmpdir }, { text = true }):wait()
+  pcall(vim.fn.delete, tmpzip, "rf")
+  if unzip.code ~= 0 then
+    pcall(vim.fn.delete, tmpdir, "rf")
+    return nil
+  end
+  return tmpdir
+end
+
+---@param tmpdir string
+---@return string[]
+local function logs_from_zip_dir(tmpdir)
+  local files = vim.fn.glob(tmpdir .. "/**/*.txt", true, true)
+  if type(files) == "string" then files = { files } end
+  if #files == 0 then return {} end
+  table.sort(files, function(a, b)
+    local na = tonumber(a:match("(%d+)_") or "0") or 0
+    local nb = tonumber(b:match("(%d+)_") or "0") or 0
+    return na < nb
+  end)
+  local lines = {}
+  for _, file in ipairs(files) do
+    local step = step_name_from_log_file(file)
+    if #lines > 0 then table.insert(lines, "") end
+    table.insert(lines, "── " .. step .. " ──")
+    local content = vim.fn.readfile(file)
+    if type(content) == "table" then vim.list_extend(lines, content) end
+  end
+  return lines
+end
+
+---gh prefixes each line as job\\tstep\\tcontent; strip job prefix and group by step.
+---@param lines string[]
+---@return string[]
+local function normalize_gh_prefixed_logs(lines)
+  local out = {}
+  local current_step = nil
+  for _, line in ipairs(lines) do
+    local step, content = line:match("^[^\t]+\t([^\t]*)\t(.*)$")
+    if step then
+      if step ~= current_step then
+        current_step = step
+        if step ~= "" and step ~= "UNKNOWN STEP" then
+          if #out > 0 then table.insert(out, "") end
+          table.insert(out, "── " .. step .. " ──")
+        end
+      end
+      table.insert(out, content)
+    else
+      table.insert(out, line)
+    end
+  end
+  return out
+end
+
+---@param root string
+---@param remote { owner: string, repo: string }
+---@param run_id string|integer
+---@param job_id string|integer
+---@return string[], string|nil
+function M.get_ci_job_logs(root, remote, run_id, job_id)
+  if not M.available() then return {}, "gh is not on PATH" end
+
+  local tmpdir = fetch_job_log_zip(root, remote, job_id)
+  if tmpdir then
+    local zip_lines = logs_from_zip_dir(tmpdir)
+    pcall(vim.fn.delete, tmpdir, "rf")
+    if #zip_lines > 0 then return zip_lines, nil end
+  end
+
+  local res = run(root, {
+    "run",
+    "view",
+    tostring(run_id),
+    "-R",
+    repo_flag(root, remote),
+    "--log",
+    "--job=" .. tostring(job_id),
+  })
+  if res.code ~= 0 then
+    local err = res.stderr ~= "" and res.stderr or res.stdout
+    return {}, err ~= "" and err or "gh run view --log failed"
+  end
+  if res.stdout == "" then return { "(empty log)" }, nil end
+  return normalize_gh_prefixed_logs(vim.split(res.stdout, "\n", { plain = true })), nil
 end
 
 return M

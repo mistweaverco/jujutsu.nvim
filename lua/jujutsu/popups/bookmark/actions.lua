@@ -70,12 +70,11 @@ function M.rename(popup)
   local root = common.root(popup)
   local bm = finder.pick_bookmark({ prompt = "Rename bookmark", cwd = root })
   if not bm then return end
-  vim.ui.input({ prompt = "New name: ", default = bm }, function(name)
-    if name and name ~= "" then
-      cli.bookmark_rename.args(bm, name).call({ cwd = root, hidden = false })
-      require("jujutsu").refresh()
-    end
-  end)
+  local name = finder.input({ prompt = "New name: ", default = bm })
+  if name and name ~= "" then
+    cli.bookmark_rename.args(bm, name).call({ cwd = root, hidden = false })
+    require("jujutsu").refresh()
+  end
 end
 
 return M

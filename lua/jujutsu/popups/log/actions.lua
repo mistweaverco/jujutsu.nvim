@@ -1,4 +1,5 @@
 local common = require("jujutsu.popups.common")
+local finder = require("jujutsu.finder")
 
 local M = {}
 
@@ -18,9 +19,8 @@ function M.log_head(popup) open_log(common.root(popup), "ancestors(@)") end
 
 function M.log_revset(popup)
   local root = common.root(popup)
-  vim.ui.input({ prompt = "Revset: ", default = "all()" }, function(rev)
-    if rev and rev ~= "" then open_log(root, rev) end
-  end)
+  local rev = finder.input({ prompt = "Revset: ", default = "all()" })
+  if rev and rev ~= "" then open_log(root, rev) end
 end
 
 return M

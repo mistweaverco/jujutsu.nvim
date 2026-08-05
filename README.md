@@ -170,6 +170,7 @@ ops are hidden).
 
 **Groups**
 
+
 | Key | Action |
 |-----|--------|
 | `r` | Review open PR/MR (DiffView) |
@@ -182,6 +183,7 @@ ops are hidden).
 | `c` | List CI runs (open URL / cancel when allowed) |
 | `t` | Trigger workflow / pipeline |
 
+
 Label colors from the forge (bg/fg) are rendered in the conversation panel.
 
 ## PR / MR review
@@ -193,12 +195,24 @@ you submit or yank markdown.
 
 **Providers**
 
+
 | Provider | Transport | Credentials |
 |----------|-----------|-------------|
 | GitHub | `gh` | `gh auth login` |
 | GitLab | `glab` | `glab auth login` |
 | Codeberg / Forgejo | `curl` REST | Prompted per host and stored under `stdpath("data")/jujutsu/credentials.json`, or `FORGEJO_TOKEN` / `CODEBERG_TOKEN` / `forge.forgejo.token` |
-| Bitbucket Cloud | `curl` REST | Prompted per workspace (**Atlassian email** + API token) and stored in the same file, or `BITBUCKET_USER` + `BITBUCKET_TOKEN` / `forge.bitbucket.*`. Token needs `read:pullrequest:bitbucket` to browse; **`write:pullrequest:bitbucket`** for approve / request-changes. |
+| Bitbucket Cloud | `curl` REST | Prompted per workspace (**Atlassian email** + API token) and stored in the same file, or `BITBUCKET_USER` + `BITBUCKET_TOKEN` / `forge.bitbucket.*`. |
+
+
+> [!NOTE]
+> Bitbucket Token needs:
+> - `read:pullrequest:bitbucket`
+> - `read:issue:bitbucket`
+> - `read:issue:bitbucket`
+> - `read:pipeline:bitbucket`
+> - `write:issue:bitbucket`
+> - `write:pipeline:bitbucket`
+> - `write:pullrequest:bitbucket`
 
 On HTTP 401, review asks whether to supply new credentials or delete the stored ones.
 
@@ -208,6 +222,7 @@ On HTTP 401, review asks whether to supply new credentials or delete the stored 
 - `require("jujutsu").review()` / `.review({ number = 15 })`
 
 **Review keymaps** (in DiffView review mode)
+
 
 | Key | Action |
 |-----|--------|
@@ -228,6 +243,7 @@ On HTTP 401, review asks whether to supply new credentials or delete the stored 
 | `I` | Open Issue/PR conversation side panel |
 | `o` | Open in browser (file at commit / PR line / conversation URL) |
 | `?` | Help |
+
 
 Sessions persist under `stdpath("data")/jujutsu/reviews/`. Bitbucket / Forgejo credentials persist under `stdpath("data")/jujutsu/credentials.json`.
 
@@ -275,7 +291,13 @@ issue_panel = {
 
 ## Issue / PR conversation panel
 
-Full-height right split showing the selected issue or pull request with its conversation (description + chronological comments). Description and comment bodies are highlighted as markdown by default (all forges); author/date headers stay plain. Labels use forge colors when available. Inline review threads (including nested replies) stay in the DiffView overlays; press `a` on a commented line to reply.
+Full-height right split showing the selected issue or
+pull request with its conversation (description + chronological comments).
+Description and comment bodies are highlighted as markdown by default (all forges);
+author/date headers stay plain. Labels use forge colors when available.
+
+Inline review threads (including nested replies) stay in
+the DiffView overlays; press `a` on a commented line to reply.
 
 **Open from**
 
@@ -340,6 +362,7 @@ recent commits, and bookmarks.
 | `<C-r>` | Refresh |
 | `<Tab>` | Toggle section / file diff / recent commit / bookmark history |
 | `<CR>` | Open file / commit |
+
 
 In the log view, `S` opens the `--stat` view and `P` opens the split popup for the
 revision under the cursor.

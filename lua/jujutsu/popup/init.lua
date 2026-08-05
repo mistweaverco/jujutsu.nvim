@@ -95,7 +95,12 @@ local function render_lines(popup)
       local text = string.format("  %s%s %s = %s", arg.key_prefix or "=", arg.key, arg.description, arg.value or "")
       add(text, "JujutsuPopupAction")
       key_actions[(arg.key_prefix or "=") .. arg.key] = function()
-        vim.ui.input({ prompt = arg.description .. ": ", default = arg.value or "" }, function(val)
+        async.void(function()
+          local val = require("jujutsu.finder").input({
+            prompt = arg.description .. ": ",
+            default = arg.value or "",
+            allow_empty = true,
+          })
           if val ~= nil then
             arg.value = val
             popup:redraw()

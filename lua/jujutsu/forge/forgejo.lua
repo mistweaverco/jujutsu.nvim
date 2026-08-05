@@ -26,7 +26,7 @@ function M.capabilities()
       labels = true,
     },
     comments = { list = true, create = true, update = true, delete = true },
-    ci = { list = true, cancel = true, trigger = true },
+    ci = { list = true, cancel = true, trigger = true, view = true, logs = true },
   }
 end
 
@@ -69,6 +69,69 @@ local function api(remote, method, path, body)
   local res = http.request(method, url, headers, body and http.encode_json(body) or nil)
   if res.err then return nil, res.err end
   return res.json or {}, nil
+end
+
+---@param remote { host: string, owner: string, repo: string }
+---@param path string
+---@return string|nil, string|nil
+local function api_text(remote, path)
+  local t, auth_err = resolve_token(remote)
+  if auth_err or not t then return nil, auth_err or "Forgejo/Codeberg token missing" end
+  local url = api_base(remote) .. path
+  local headers = {
+    Authorization = "token " .. t,
+    Accept = "text/plain",
+  }
+  local res = http.request("GET", url, headers)
+  if res.err then return nil, res.err end
+  return res.body or "", nil
+end
+
+---@param r table
+---@return ForgeCiRun
+local function map_run(r)
+  local status = r.status or r.state or ""
+  local can_cancel = status == "queued" or status == "running" or status == "in_progress" or status == "waiting"
+  return {
+    id = tostring(r.id),
+    name = r.display_title or r.name or r.title or ("run " .. tostring(r.id)),
+    title = r.display_title or r.name or r.title,
+    workflow = r.name or "Workflow",
+    event = r.event,
+    status = status,
+    conclusion = r.conclusion,
+    url = r.html_url or r.url,
+    can_cancel = can_cancel,
+    branch = r.head_branch or r.ref,
+    head_sha = r.head_sha or r.commit_sha,
+    created_at = r.created_at,
+    updated_at = r.updated_at,
+    started_at = r.run_started_at or r.created_at,
+    elapsed = "",
+  }
+end
+
+---@param j table
+---@return ForgeCiJob
+local function map_job(j)
+  local steps = {}
+  for _, s in ipairs(j.steps or {}) do
+    table.insert(steps, {
+      name = s.name or "?",
+      status = s.status or "",
+      conclusion = s.conclusion,
+      number = s.number,
+    })
+  end
+  return {
+    id = tostring(j.id),
+    name = j.name or ("job " .. tostring(j.id)),
+    status = j.status or "",
+    conclusion = j.conclusion,
+    url = j.html_url or j.url,
+    elapsed = "",
+    steps = steps,
+  }
 end
 
 ---@param _root string
@@ -666,16 +729,16 @@ end
 ---@param _ string
 ---@param remote { host: string, owner: string, repo: string }
 ---@param opts? { branch?: string, limit?: integer }
----@return ForgeCiRun[], string|nil
+---@return ForgeCiRun[], string|nil, ForgeCiListMeta|nil
 function M.list_ci_runs(_, remote, opts)
   if not M.available(remote) then return {}, "Forgejo/Codeberg token missing or curl unavailable" end
   opts = opts or {}
-  local path =
-    string.format("/repos/%s/%s/actions/runs?limit=%s", remote.owner, remote.repo, tostring(opts.limit or 30))
+  local limit = opts.limit or 20
+  local path = string.format("/repos/%s/%s/actions/runs?limit=%s", remote.owner, remote.repo, tostring(limit))
   local data, err = api(remote, "GET", path)
   if err then
     -- Older Forgejo may lack Actions; degrade gracefully
-    return {}, nil
+    return {}, nil, { has_more = false }
   end
   local runs = {}
   if type(data) == "table" then
@@ -687,20 +750,9 @@ function M.list_ci_runs(_, remote, opts)
   end
   local out = {}
   for _, r in ipairs(runs) do
-    local status = r.status or r.state or ""
-    local can_cancel = status == "queued" or status == "running" or status == "in_progress" or status == "waiting"
-    table.insert(out, {
-      id = tostring(r.id),
-      name = r.name or r.title or ("run " .. tostring(r.id)),
-      status = status,
-      conclusion = r.conclusion,
-      url = r.html_url or r.url,
-      can_cancel = can_cancel,
-      branch = r.head_branch or r.ref,
-      head_sha = r.head_sha or r.commit_sha,
-    })
+    table.insert(out, map_run(r))
   end
-  return out, nil
+  return out, nil, { has_more = #out >= limit }
 end
 
 ---@param _ string
@@ -756,6 +808,58 @@ function M.trigger_ci(_, remote, opts)
   )
   if err then return false, err end
   return true
+end
+
+---@param _ string
+---@param remote { host: string, owner: string, repo: string }
+---@param run_id string|integer
+---@return ForgeCiRunDetail|nil, string|nil
+function M.get_ci_run(_, remote, run_id)
+  if not M.available(remote) then return nil, "Forgejo/Codeberg token missing or curl unavailable" end
+  local run_data, err =
+    api(remote, "GET", string.format("/repos/%s/%s/actions/runs/%s", remote.owner, remote.repo, tostring(run_id)))
+  if err then return nil, err end
+  local jobs_data, jerr =
+    api(remote, "GET", string.format("/repos/%s/%s/actions/runs/%s/jobs", remote.owner, remote.repo, tostring(run_id)))
+  if jerr then return nil, jerr end
+  local jobs = {}
+  local job_list = (type(jobs_data) == "table" and (jobs_data.jobs or jobs_data.workflow_jobs)) or {}
+  if type(job_list) == "table" then
+    for _, j in ipairs(job_list) do
+      table.insert(jobs, map_job(j))
+    end
+  end
+  return { run = map_run(run_data or {}), jobs = jobs, annotations = {} }, nil
+end
+
+---@param _ string
+---@param remote { host: string, owner: string, repo: string }
+---@param run_id string|integer
+---@param job_id string|integer
+---@return ForgeCiJobDetail|nil, string|nil
+function M.get_ci_job(_, remote, run_id, job_id)
+  if not M.available(remote) then return nil, "Forgejo/Codeberg token missing or curl unavailable" end
+  local run_data, err =
+    api(remote, "GET", string.format("/repos/%s/%s/actions/runs/%s", remote.owner, remote.repo, tostring(run_id)))
+  if err then return nil, err end
+  local job_data, jerr =
+    api(remote, "GET", string.format("/repos/%s/%s/actions/jobs/%s", remote.owner, remote.repo, tostring(job_id)))
+  if jerr then return nil, jerr end
+  return { run = map_run(run_data or {}), job = map_job(job_data or {}), annotations = {} }, nil
+end
+
+---@param _ string
+---@param remote { host: string, owner: string, repo: string }
+---@param _run_id string|integer
+---@param job_id string|integer
+---@return string[], string|nil
+function M.get_ci_job_logs(_, remote, _run_id, job_id)
+  if not M.available(remote) then return {}, "Forgejo/Codeberg token missing or curl unavailable" end
+  local text, err =
+    api_text(remote, string.format("/repos/%s/%s/actions/jobs/%s/logs", remote.owner, remote.repo, tostring(job_id)))
+  if err then return {}, err end
+  if not text or text == "" then return { "(empty log)" }, nil end
+  return vim.split(text, "\n", { plain = true }), nil
 end
 
 return M

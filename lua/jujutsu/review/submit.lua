@@ -44,8 +44,8 @@ local function submit_with_auth_retry(session, event, on_done, opts)
   local partial = meta and meta.posted_comments
   if partial then notify.warn(err or "Comments posted, but review status change failed") end
 
-  -- 401, or Bitbucket 403 "missing privilege scopes", → offer credential update.
-  if session.remote and provider.is_auth_error(err) then
+  -- 401 invalid token, or Bitbucket 403 missing scopes → offer credential update.
+  if session.remote and (provider.is_auth_error(err) or provider.is_scope_error(err)) then
     if not partial then notify.error(err or "Authentication failed") end
     provider.handle_auth_failure(session.remote, function(updated)
       if updated then

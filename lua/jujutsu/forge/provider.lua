@@ -12,7 +12,7 @@ local M = {}
 ---@field prs { list: boolean, search: boolean, create: boolean, update: boolean, close: boolean, merge: boolean, draft: boolean, labels: boolean }
 ---@field issues { list: boolean, search: boolean, create: boolean, update: boolean, close: boolean, labels: boolean }
 ---@field comments { list: boolean, create: boolean, update: boolean, delete: boolean }
----@field ci { list: boolean, cancel: boolean, trigger: boolean }
+---@field ci { list: boolean, cancel: boolean, trigger: boolean, view: boolean, logs: boolean }
 
 ---@class ForgeSearchFilter
 ---@field state? string "open"|"closed"|"all"|"merged"
@@ -26,12 +26,51 @@ local M = {}
 ---@class ForgeCiRun
 ---@field id string
 ---@field name string
+---@field title? string
+---@field workflow? string
+---@field event? string
 ---@field status string
 ---@field conclusion? string
 ---@field url? string
 ---@field can_cancel? boolean
 ---@field branch? string
 ---@field head_sha? string
+---@field created_at? string
+---@field updated_at? string
+---@field started_at? string
+---@field elapsed? string
+
+---@class ForgeCiStep
+---@field name string
+---@field status string
+---@field conclusion? string
+---@field number? integer
+
+---@class ForgeCiJob
+---@field id string
+---@field name string
+---@field status string
+---@field conclusion? string
+---@field url? string
+---@field elapsed? string
+---@field started_at? string
+---@field completed_at? string
+---@field steps? ForgeCiStep[]
+
+---@class ForgeCiAnnotation
+---@field level? string "warning"|"error"|"notice"
+---@field message string
+---@field context? string
+
+---@class ForgeCiRunDetail
+---@field run ForgeCiRun
+---@field jobs ForgeCiJob[]
+---@field annotations? ForgeCiAnnotation[]
+
+---@class ForgeCiJobDetail
+---@field run ForgeCiRun
+---@field job ForgeCiJob
+---@field annotations? ForgeCiAnnotation[]
 
 ---@class ForgeWorkflow
 ---@field id string
@@ -76,7 +115,7 @@ local function empty_caps()
       labels = false,
     },
     comments = { list = false, create = false, update = false, delete = false },
-    ci = { list = false, cancel = false, trigger = false },
+    ci = { list = false, cancel = false, trigger = false, view = false, logs = false },
   }
 end
 
@@ -146,6 +185,10 @@ end
 ---@param err string|nil
 ---@return boolean
 function M.is_auth_error(err) return credentials.is_auth_error(err) end
+
+---@param err string|nil
+---@return boolean
+function M.is_scope_error(err) return credentials.is_scope_error(err) end
 
 ---@param labels ForgeLabel[]|string[]|nil
 ---@return string[]
@@ -474,10 +517,13 @@ function M.delete_comment(root, number, comment_id, opts, remote)
   return mod.delete_comment(root, remote, number, comment_id, opts or {})
 end
 
+---@class ForgeCiListMeta
+---@field has_more? boolean
+
 ---@param root string
 ---@param opts? { branch?: string, limit?: integer }
 ---@param remote? ForgeRemote
----@return ForgeCiRun[], string|nil
+---@return ForgeCiRun[], string|nil, ForgeCiListMeta|nil
 function M.list_ci_runs(root, opts, remote)
   remote = remote or remote_mod.detect(root)
   local mod = backend(remote)
@@ -521,6 +567,44 @@ function M.trigger_ci(root, opts, remote)
   if not mod or not remote then return false, "No forge provider for this repository" end
   if type(mod.trigger_ci) ~= "function" then return false, "trigger_ci not supported for " .. remote.provider end
   return mod.trigger_ci(root, remote, opts or {})
+end
+
+---@param root string
+---@param run_id string|integer
+---@param remote? ForgeRemote
+---@return ForgeCiRunDetail|nil, string|nil
+function M.get_ci_run(root, run_id, remote)
+  remote = remote or remote_mod.detect(root)
+  local mod = backend(remote)
+  if not mod or not remote then return nil, "No forge provider for this repository" end
+  if type(mod.get_ci_run) ~= "function" then return nil, "CI run details not supported for " .. remote.provider end
+  return mod.get_ci_run(root, remote, run_id)
+end
+
+---@param root string
+---@param run_id string|integer
+---@param job_id string|integer
+---@param remote? ForgeRemote
+---@return ForgeCiJobDetail|nil, string|nil
+function M.get_ci_job(root, run_id, job_id, remote)
+  remote = remote or remote_mod.detect(root)
+  local mod = backend(remote)
+  if not mod or not remote then return nil, "No forge provider for this repository" end
+  if type(mod.get_ci_job) ~= "function" then return nil, "CI job details not supported for " .. remote.provider end
+  return mod.get_ci_job(root, remote, run_id, job_id)
+end
+
+---@param root string
+---@param run_id string|integer
+---@param job_id string|integer
+---@param remote? ForgeRemote
+---@return string[], string|nil
+function M.get_ci_job_logs(root, run_id, job_id, remote)
+  remote = remote or remote_mod.detect(root)
+  local mod = backend(remote)
+  if not mod or not remote then return {}, "No forge provider for this repository" end
+  if type(mod.get_ci_job_logs) ~= "function" then return {}, "CI logs not supported for " .. remote.provider end
+  return mod.get_ci_job_logs(root, remote, run_id, job_id)
 end
 
 return M

@@ -23,11 +23,16 @@ end
 ---@param url string
 ---@param headers table<string, string>
 ---@param data? string
+---@param opts? { follow_redirects?: boolean }
 ---@return ForgeHttpResult
-function M.request(method, url, headers, data)
+function M.request(method, url, headers, data, opts)
   if vim.fn.executable("curl") ~= 1 then return { body = "", status = nil, err = "curl is not on PATH" } end
 
-  local args = { "curl", "-sS", "-X", method }
+  opts = opts or {}
+  local args = { "curl", "-sS" }
+  if opts.follow_redirects then table.insert(args, "-L") end
+  table.insert(args, "-X")
+  table.insert(args, method)
   for key, value in pairs(headers or {}) do
     if value ~= nil then
       table.insert(args, "-H")
@@ -82,22 +87,25 @@ function M.basic_auth(user, token) return "Basic " .. vim.base64.encode(string.f
 ---@param err string|nil
 ---@param status integer|nil
 ---@return boolean
+function M.is_scope_error(err, status)
+  if status ~= 403 and type(err) == "string" and not err:match("HTTP 403") then return false end
+  if type(err) ~= "string" then return status == 403 end
+  local lower = err:lower()
+  return lower:find("privilege scopes", 1, true) ~= nil
+    or lower:find("required privilege", 1, true) ~= nil
+    or lower:find("lack one or more required", 1, true) ~= nil
+    or lower:find("write:pullrequest", 1, true) ~= nil
+    or lower:find("read:pipeline", 1, true) ~= nil
+    or lower:find("write:pipeline", 1, true) ~= nil
+end
+
+---@param err string|nil
+---@param status integer|nil
+---@return boolean
 function M.is_auth_error(err, status)
   if status == 401 then return true end
   if type(err) ~= "string" then return false end
   if err:match("HTTP 401") then return true end
-  -- Bitbucket scoped API tokens return 403 (not 401) when write scopes are missing.
-  if err:match("HTTP 403") then
-    local lower = err:lower()
-    if
-      lower:find("privilege scopes", 1, true)
-      or lower:find("required privilege", 1, true)
-      or lower:find("write:pullrequest", 1, true)
-      or lower:find("lack one or more required", 1, true)
-    then
-      return true
-    end
-  end
   return false
 end
 

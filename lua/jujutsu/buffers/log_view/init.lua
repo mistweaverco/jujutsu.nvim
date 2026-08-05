@@ -3,6 +3,7 @@ local Graph = require("jujutsu.buffers.log_view.graph")
 local async = require("jujutsu.async")
 local cli = require("jujutsu.jj.cli")
 local config = require("jujutsu.config")
+local finder = require("jujutsu.finder")
 local mappings = require("jujutsu.ui.mappings")
 
 local M = {}
@@ -250,8 +251,8 @@ function M.open(root, revset)
     Abandon = function()
       local c = under_cursor()
       if c then
-        vim.ui.select({ "Yes", "No" }, { prompt = "Abandon " .. c.change_id .. "?" }, function(choice)
-          if choice == "Yes" then run(cli.abandon.args(c.change_id)) end
+        async.void(function()
+          if finder.confirm("Abandon " .. c.change_id .. "?") then run(cli.abandon.args(c.change_id)) end
         end)
       end
     end,

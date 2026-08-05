@@ -7,30 +7,28 @@ local finder = require("jujutsu.finder")
 local M = {}
 
 function M.add(popup)
-  vim.ui.input({ prompt = "Workspace path: " }, function(path)
-    if not path or path == "" then return end
-    path = vim.fn.expand(path)
-    local b = cli.workspace_add.args(path)
-    common.run(popup, b)
-    local cmd = config.values.workspace_open_command
-    if cmd then vim.fn.system(cmd:gsub("{path}", path)) end
-  end)
+  local path = finder.input({ prompt = "Workspace path: " })
+  if not path or path == "" then return end
+  path = vim.fn.expand(path)
+  local b = cli.workspace_add.args(path)
+  common.run(popup, b)
+  local cmd = config.values.workspace_open_command
+  if cmd then vim.fn.system(cmd:gsub("{path}", path)) end
 end
 
 function M.quick_add(popup)
   local root = common.root(popup)
   local base = vim.fn.expand(config.values.workspace_worktrees_directory or "~/.worktrees")
   vim.fn.mkdir(base, "p")
-  vim.ui.input({ prompt = "Workspace name: " }, function(name)
-    if not name or name == "" then return end
-    local path = base .. "/" .. name
-    local init = config.values.workspace_initialize_command
-    if init then vim.fn.system(init:gsub("{path}", path)) end
-    cli.workspace_add.name(name).args(path).call({ cwd = root, hidden = false })
-    local cmd = config.values.workspace_open_command
-    if cmd then vim.fn.system(cmd:gsub("{path}", path)) end
-    require("jujutsu").refresh()
-  end)
+  local name = finder.input({ prompt = "Workspace name: " })
+  if not name or name == "" then return end
+  local path = base .. "/" .. name
+  local init = config.values.workspace_initialize_command
+  if init then vim.fn.system(init:gsub("{path}", path)) end
+  cli.workspace_add.name(name).args(path).call({ cwd = root, hidden = false })
+  local cmd = config.values.workspace_open_command
+  if cmd then vim.fn.system(cmd:gsub("{path}", path)) end
+  require("jujutsu").refresh()
 end
 
 function M.forget(popup)
@@ -49,12 +47,11 @@ function M.rename(popup)
   local selected = finder.pick({ prompt = "Rename workspace", entries = res.stdout })
   if not selected then return end
   local old = vim.split(selected, "%s+")[1]
-  vim.ui.input({ prompt = "New name: ", default = old }, function(name)
-    if name and name ~= "" then
-      cli.workspace_rename.args(old, name).call({ cwd = root, hidden = false })
-      require("jujutsu").refresh()
-    end
-  end)
+  local name = finder.input({ prompt = "New name: ", default = old })
+  if name and name ~= "" then
+    cli.workspace_rename.args(old, name).call({ cwd = root, hidden = false })
+    require("jujutsu").refresh()
+  end
 end
 
 function M.list(popup)

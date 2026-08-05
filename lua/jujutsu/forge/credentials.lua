@@ -1,4 +1,6 @@
+local async = require("jujutsu.async")
 local config = require("jujutsu.config")
+local finder = require("jujutsu.finder")
 
 local M = {}
 
@@ -149,64 +151,48 @@ function M.has(remote)
   return creds ~= nil
 end
 
----@param prompt string
----@param default? string
----@param cb fun(value: string|nil)
-local function input(prompt, default, cb)
-  vim.ui.input({ prompt = prompt, default = default or "" }, function(value)
-    if value == nil then
-      cb(nil)
-      return
-    end
-    value = vim.trim(value)
-    if value == "" then
-      cb(nil)
-      return
-    end
-    cb(value)
-  end)
-end
-
 ---@param remote ForgeRemote
 ---@param defaults? ForgeStoredCreds
 ---@param cb fun(creds: ForgeStoredCreds|nil)
 function M.prompt(remote, defaults, cb)
   defaults = defaults or {}
-  if remote.provider == "bitbucket" then
-    local workspace = remote.owner or "workspace"
-    input(string.format("Bitbucket Atlassian email (%s): ", workspace), defaults.user, function(user)
-      if not user then
-        cb(nil)
-        return
-      end
-      input(
-        string.format("Bitbucket API token with write:pullrequest (%s): ", workspace),
-        defaults.token,
-        function(token)
-          if not token then
-            cb(nil)
-            return
-          end
-          cb({ user = user, token = token })
+  vim.schedule(function()
+    async.void(function()
+      local creds = nil
+      if remote.provider == "bitbucket" then
+        local workspace = remote.owner or "workspace"
+        local user = finder.input({
+          prompt = string.format("Bitbucket Atlassian email (%s): ", workspace),
+          default = defaults.user or "",
+        })
+        if not user or user == "" then
+          cb(nil)
+          return
         end
-      )
-    end)
-    return
-  end
-
-  if remote.provider == "forgejo" then
-    local host = remote.host or "forgejo"
-    input(string.format("Forgejo/Codeberg token (%s): ", host), defaults.token, function(token)
-      if not token then
-        cb(nil)
-        return
+        local token = finder.input({
+          prompt = string.format("Bitbucket API token with write:pullrequest (%s): ", workspace),
+          default = defaults.token or "",
+        })
+        if not token or token == "" then
+          cb(nil)
+          return
+        end
+        creds = { user = user, token = token }
+      elseif remote.provider == "forgejo" then
+        local host = remote.host or "forgejo"
+        local token = finder.input({
+          prompt = string.format("Forgejo/Codeberg token (%s): ", host),
+          default = defaults.token or "",
+        })
+        if not token or token == "" then
+          cb(nil)
+          return
+        end
+        creds = { token = token }
       end
-      cb({ token = token })
+      cb(creds)
     end)
-    return
-  end
-
-  cb(nil)
+  end)
 end
 
 ---Ensure credentials exist, prompting and persisting when missing.
@@ -261,38 +247,52 @@ function M.handle_invalid(remote, cb)
   end
   table.insert(choices, { id = "cancel", text = "Cancel" })
 
-  vim.ui.select(choices, {
-    prompt = string.format(
-      "Auth/scope problem for %s (%s). Update token? "
-        .. "(Bitbucket approve/request-changes needs write:pullrequest:bitbucket)",
-      label,
-      source or "unknown"
-    ),
-    format_item = function(item) return item.text end,
-  }, function(choice)
-    if not choice or choice.id == "cancel" then
-      cb("cancelled")
-      return
-    end
-    if choice.id == "delete" then
-      M.delete(remote)
-      require("jujutsu.notify").info("Stored credentials deleted")
-      cb("deleted")
-      return
-    end
-    local current = select(1, M.resolve(remote)) or {}
-    M.prompt(remote, current, function(creds)
-      if not creds then
+  local prompt = string.format(
+    "Auth/scope problem for %s (%s). "
+      .. "If scopes are missing, create a new API token with the required permissions "
+      .. "(re-entering the same token will not help). Update credentials?",
+    label,
+    source or "unknown"
+  )
+
+  vim.schedule(function()
+    async.void(function()
+      local entries = {}
+      local id_by_text = {}
+      for _, choice in ipairs(choices) do
+        table.insert(entries, choice.text)
+        id_by_text[choice.text] = choice.id
+      end
+      local selected = finder.pick({ prompt = prompt, entries = entries })
+      if not selected then
         cb("cancelled")
         return
       end
-      if not M.set(remote, creds) then
-        require("jujutsu.notify").error("Failed to save credentials")
+      local action = id_by_text[tostring(selected)]
+      if not action or action == "cancel" then
         cb("cancelled")
         return
       end
-      require("jujutsu.notify").info("Credentials updated")
-      cb("updated")
+      if action == "delete" then
+        M.delete(remote)
+        require("jujutsu.notify").info("Stored credentials deleted")
+        cb("deleted")
+        return
+      end
+      local current = select(1, M.resolve(remote)) or {}
+      M.prompt(remote, current, function(creds)
+        if not creds then
+          cb("cancelled")
+          return
+        end
+        if not M.set(remote, creds) then
+          require("jujutsu.notify").error("Failed to save credentials")
+          cb("cancelled")
+          return
+        end
+        require("jujutsu.notify").info("Credentials updated")
+        cb("updated")
+      end)
     end)
   end)
 end
@@ -301,5 +301,10 @@ end
 ---@param status integer|nil
 ---@return boolean
 function M.is_auth_error(err, status) return require("jujutsu.forge.http").is_auth_error(err, status) end
+
+---@param err string|nil
+---@param status integer|nil
+---@return boolean
+function M.is_scope_error(err, status) return require("jujutsu.forge.http").is_scope_error(err, status) end
 
 return M

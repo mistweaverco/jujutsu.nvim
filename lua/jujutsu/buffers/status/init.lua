@@ -2,6 +2,7 @@ local Buffer = require("jujutsu.ui.buffer")
 local async = require("jujutsu.async")
 local cli = require("jujutsu.jj.cli")
 local config = require("jujutsu.config")
+local finder = require("jujutsu.finder")
 local mappings = require("jujutsu.ui.mappings")
 local notify = require("jujutsu.notify")
 local status_data = require("jujutsu.jj.status")
@@ -1039,16 +1040,16 @@ local function bind_actions(bufnr)
       if not item then return end
       if item.type == "file" and item.data.file then
         local path = item.data.file.path
-        vim.ui.select({ "Yes", "No" }, { prompt = "Restore " .. path .. "?" }, function(choice)
-          if choice == "Yes" then
+        async.void(function()
+          if finder.confirm("Restore " .. path .. "?") then
             run_jj(function() return cli.restore.paths(path).call_async({ cwd = instance.root, hidden = false }) end)
           end
         end)
       elseif item.type == "change" or item.type == "header" then
         local change = get_change_from_item(item)
         if change then
-          vim.ui.select({ "Yes", "No" }, { prompt = "Abandon " .. change.change_id .. "?" }, function(choice)
-            if choice == "Yes" then
+          async.void(function()
+            if finder.confirm("Abandon " .. change.change_id .. "?") then
               run_jj(
                 function() return cli.abandon.args(change.change_id).call_async({ cwd = instance.root, hidden = false }) end
               )
@@ -1058,8 +1059,8 @@ local function bind_actions(bufnr)
       elseif item.type == "bookmark" and item.data.bookmark then
         local bm = item.data.bookmark
         local name = bm.remote ~= "" and (bm.name .. "@" .. bm.remote) or bm.name
-        vim.ui.select({ "Yes", "No" }, { prompt = "Delete bookmark " .. name .. "?" }, function(choice)
-          if choice == "Yes" then
+        async.void(function()
+          if finder.confirm("Delete bookmark " .. name .. "?") then
             run_jj(
               function() return cli.bookmark_delete.args(name).call_async({ cwd = instance.root, hidden = false }) end
             )
@@ -1159,7 +1160,8 @@ local function bind_actions(bufnr)
     end,
     CommandHistory = function() require("jujutsu.buffers.process").show_history() end,
     Command = function()
-      vim.ui.input({ prompt = "jj " }, function(input)
+      async.void(function()
+        local input = finder.input({ prompt = "jj " })
         if not input or input == "" then return end
         local args = vim.split(input, "%s+")
         local jj = require("jujutsu.jj.shell").resolve_jj()

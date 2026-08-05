@@ -76,12 +76,11 @@ end
 function M.describe_with_message(popup)
   local root = common.root(popup)
   local rev = common.commit(popup) or "@"
-  vim.ui.input({ prompt = "Description: " }, function(msg)
-    if msg and msg ~= "" then
-      cli.describe.revision(rev).message(msg).call({ cwd = root, hidden = false })
-      require("jujutsu").refresh()
-    end
-  end)
+  local msg = finder.input({ prompt = "Description: " })
+  if msg and msg ~= "" then
+    cli.describe.revision(rev).message(msg).call({ cwd = root, hidden = false })
+    require("jujutsu").refresh()
+  end
 end
 
 function M.abandon(popup)

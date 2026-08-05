@@ -169,28 +169,32 @@ end
 ---@param events string[]
 ---@param on_done fun(event: string|nil)
 function M.pick_submit_event(events, on_done)
-  local labels = {}
-  local map = {}
-  for _, e in ipairs(events) do
-    local label = e
-    if e == "COMMENT" then
-      label = "Comment"
-    elseif e == "APPROVE" then
-      label = "Approve"
-    elseif e == "REQUEST_CHANGES" then
-      label = "Request changes"
-    elseif e == "DRAFT" then
-      label = "Draft (GitHub pending)"
-    end
-    table.insert(labels, label)
-    map[label] = e
-  end
-  vim.ui.select(labels, { prompt = "Submit review as" }, function(choice)
-    if not choice then
-      on_done(nil)
-      return
-    end
-    on_done(map[choice])
+  vim.schedule(function()
+    require("jujutsu.async").void(function()
+      local finder = require("jujutsu.finder")
+      local entries = {}
+      local map = {}
+      for _, e in ipairs(events) do
+        local label = e
+        if e == "COMMENT" then
+          label = "Comment"
+        elseif e == "APPROVE" then
+          label = "Approve"
+        elseif e == "REQUEST_CHANGES" then
+          label = "Request changes"
+        elseif e == "DRAFT" then
+          label = "Draft (GitHub pending)"
+        end
+        table.insert(entries, label)
+        map[label] = e
+      end
+      local choice = finder.pick({ prompt = "Submit review as", entries = entries })
+      if not choice then
+        on_done(nil)
+        return
+      end
+      on_done(map[tostring(choice)])
+    end)
   end)
 end
 

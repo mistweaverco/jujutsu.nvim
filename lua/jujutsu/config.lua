@@ -143,6 +143,23 @@ local defaults = {
       browser = "o",
     },
   },
+  ci_panel = {
+    enabled = true,
+    width = 0.55,
+    min_width = 72,
+    max_width = 160,
+    page_size = 20,
+    keymaps = {
+      close = "q",
+      back = "<bs>",
+      refresh = "r",
+      open = "<cr>",
+      browser = "o",
+      logs = "l",
+      cancel = "x",
+      load_more = "+",
+    },
+  },
   sections = {
     files = { folded = false, hidden = false },
     conflicts = { folded = false, hidden = false },
