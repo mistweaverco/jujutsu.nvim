@@ -37,6 +37,13 @@ function M.remove_item(tbl, item)
   return false
 end
 
+---@param s string
+---@return string
+function M.normalize_newlines(s)
+  if not s or s == "" then return s or "" end
+  return s:gsub("\r\n", "\n"):gsub("\r", "")
+end
+
 ---@param str string
 ---@return string
 function M.trim(str) return (str:gsub("^%s+", ""):gsub("%s+$", "")) end

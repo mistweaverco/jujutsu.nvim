@@ -1,3 +1,5 @@
+local util = require("jujutsu.util")
+
 local M = {}
 
 ---Coerce JSON null / non-strings from forge APIs into a plain string.
@@ -6,7 +8,7 @@ local M = {}
 ---@return string
 function M.as_string(value, fallback)
   if value == nil or value == vim.NIL then return fallback or "" end
-  if type(value) == "string" then return value end
+  if type(value) == "string" then return util.normalize_newlines(value) end
   if type(value) == "number" or type(value) == "boolean" then return tostring(value) end
   return fallback or ""
 end

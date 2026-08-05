@@ -1,4 +1,5 @@
 local model = require("jujutsu.issue_panel.model")
+local util = require("jujutsu.util")
 
 local M = {}
 
@@ -71,7 +72,7 @@ function M.build(data, opts)
   if data.error then
     push(lines, highlights, "Error", "JujutsuConflict")
     push(lines, highlights, "", nil)
-    for _, line in ipairs(vim.split(tostring(data.error), "\n", { plain = true })) do
+    for _, line in ipairs(vim.split(util.normalize_newlines(tostring(data.error)), "\n", { plain = true })) do
       push(lines, highlights, line, "JujutsuSubtle")
     end
     return lines, highlights, { comment_ranges = comment_ranges }
