@@ -62,7 +62,7 @@ function M.build_list(runs, remote, opts)
   for _, run in ipairs(runs or {}) do
     local eff = model.effective_status(run.status, run.conclusion)
     local icon, icon_hl = model.status_icon(eff)
-    local elapsed = run.elapsed or model.format_elapsed(run.started_at, run.updated_at)
+    local elapsed = model.elapsed_text(run.elapsed, run.started_at, run.updated_at)
     local age = model.format_age(run.created_at or run.started_at)
     local line = string.format(
       "%s  %-42s  %-14s  %-12s  %-8s  %-8s  %s",
@@ -117,7 +117,7 @@ function M.build_run(detail)
   for _, job in ipairs(detail.jobs or {}) do
     local j_eff = model.effective_status(job.status, job.conclusion)
     local j_icon, j_icon_hl = model.status_icon(j_eff)
-    local elapsed = job.elapsed or model.format_elapsed(job.started_at, job.completed_at)
+    local elapsed = model.elapsed_text(job.elapsed, job.started_at, job.completed_at)
     local text =
       string.format("%s %s in %s (ID %s)", j_icon, job.name or "?", elapsed ~= "" and elapsed or "?", tostring(job.id))
     local start_line = #lines
@@ -171,7 +171,7 @@ function M.build_job(detail, caps)
 
   local j_eff = model.effective_status(job.status, job.conclusion)
   local j_icon, j_icon_hl = model.status_icon(j_eff)
-  local elapsed = job.elapsed or model.format_elapsed(job.started_at, job.completed_at)
+  local elapsed = model.elapsed_text(job.elapsed, job.started_at, job.completed_at)
   local header =
     string.format("%s %s in %s (ID %s)", j_icon, job.name or "?", elapsed ~= "" and elapsed or "?", tostring(job.id))
   push(lines, highlights, header, j_icon_hl)

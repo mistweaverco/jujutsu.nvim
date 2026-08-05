@@ -33,6 +33,15 @@ function M.format_elapsed(start_iso, end_iso)
   return string.format("%dh%dm", hrs, mins)
 end
 
+---@param elapsed? string
+---@param start_iso? string
+---@param end_iso? string
+---@return string
+function M.elapsed_text(elapsed, start_iso, end_iso)
+  if elapsed and elapsed ~= "" then return elapsed end
+  return M.format_elapsed(start_iso, end_iso)
+end
+
 ---@param iso? string
 ---@return string
 function M.format_age(iso)

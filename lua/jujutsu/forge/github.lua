@@ -873,12 +873,7 @@ local function repo_flag(_, remote) return remote.owner .. "/" .. remote.repo en
 local function parse_time(iso)
   if not iso or iso == "" then return nil end
   local y, mo, d, h, mi, s = iso:match("^(%d+)%-(%d+)%-(%d+)T(%d+):(%d+):(%d+)")
-  if y then return nil end
-  if not mo then return nil end
-  if not d then return nil end
-  if not h then return nil end
-  if not mi then return nil end
-  if not s then return nil end
+  if not y then return nil end
   return os.time({
     year = tonumber(y),
     month = tonumber(mo),
