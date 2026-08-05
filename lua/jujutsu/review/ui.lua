@@ -66,7 +66,7 @@ function M.prompt_comment(title, opts, on_done)
   local allow_empty = opts.allow_empty == true
   local origin_win = vim.api.nvim_get_current_win()
   local cursor_mod = require("jujutsu.ui.cursor")
-  cursor_mod.push_typing()
+  cursor_mod.push_typing({ insert_capable = true })
 
   local buf = vim.api.nvim_create_buf(false, true)
   -- acwrite so :w triggers BufWriteCmd; hide (not wipe) so float teardown cannot
@@ -132,7 +132,7 @@ function M.prompt_comment(title, opts, on_done)
     -- close an underlying DiffView split. Defer cleanup + callback.
     vim.schedule(function()
       pcall(vim.cmd, "stopinsert")
-      cursor_mod.pop_typing()
+      cursor_mod.pop_typing({ insert_capable = true })
       if vim.api.nvim_win_is_valid(win) then pcall(vim.api.nvim_win_close, win, true) end
       if vim.api.nvim_buf_is_valid(buf) then
         vim.bo[buf].modified = false

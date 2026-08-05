@@ -176,6 +176,15 @@ local readonly_commands = {
   ["workspace root"] = true,
 }
 
+---@param command string
+---@param arg string
+---@return string
+local function literal_bookmark_arg(command, arg)
+  if command == "bookmark list" then return arg end
+  if command:match("^bookmark") then return util.bookmark_literal(arg) end
+  return arg
+end
+
 local mt_builder = {}
 
 mt_builder.__index = function(tbl, action)
@@ -184,8 +193,9 @@ mt_builder.__index = function(tbl, action)
 
   if action == "args" or action == "arguments" then
     return function(...)
+      local command = rawget(tbl, k_command)
       for _, v in ipairs({ ... }) do
-        table.insert(state.arguments, tostring(v))
+        table.insert(state.arguments, literal_bookmark_arg(command, tostring(v)))
       end
       return tbl
     end
@@ -232,7 +242,12 @@ mt_builder.__index = function(tbl, action)
   if config.options and config.options[action] then
     return function(value)
       table.insert(state.options, config.options[action])
-      if value ~= nil then table.insert(state.options, tostring(value)) end
+      if value ~= nil then
+        local v = tostring(value)
+        local command = rawget(tbl, k_command)
+        if action == "bookmark" or (action == "branch" and command == "rebase") then v = util.bookmark_literal(v) end
+        table.insert(state.options, v)
+      end
       return tbl
     end
   end

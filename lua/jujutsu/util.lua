@@ -107,10 +107,15 @@ function M.command_label(cmd)
   return "Running…"
 end
 
+---Escape a string for a jj double-quoted literal.
+---@param s string
+---@return string
+function M.escape_jj_string(s) return (tostring(s):gsub("\\", "\\\\"):gsub('"', '\\"')) end
+
 ---Escape a path for a jj double-quoted string literal.
 ---@param path string
 ---@return string
-local function escape_jj_string(path) return (tostring(path):gsub("\\", "\\\\"):gsub('"', '\\"')) end
+local function escape_jj_string(path) return M.escape_jj_string(path) end
 
 ---Convert a repo-relative path into a jj fileset that matches that exact file.
 ---Bare paths are filesets (`prefix-glob`); characters like `()[]*?` change meaning
@@ -143,6 +148,16 @@ function M.fileset_literal(path)
   end
   if path:sub(1, 1) == '"' or path:sub(1, 1) == "'" then return path end
   return string.format('root-file:"%s"', escape_jj_string(path))
+end
+
+---Quote a bookmark name/ref for jj string-pattern arguments (names with `/`, `@`, etc.).
+---@param ref string
+---@return string
+function M.bookmark_literal(ref)
+  ref = tostring(ref or "")
+  if ref == "" then return '""' end
+  if ref:sub(1, 1) == '"' or ref:sub(1, 1) == "'" then return ref end
+  return string.format('"%s"', M.escape_jj_string(ref))
 end
 
 ---Make a path safe to embed in a `jujutsu://…` buffer name (`+`, `#`, `()`, …).
