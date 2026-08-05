@@ -188,8 +188,20 @@ function M.create_pr(popup)
       vim.schedule(function()
         require("jujutsu.review.ui").prompt_comment("PR body", {}, function(body)
           run_async(function()
-            local head = pick_text("Head branch", { optional = true })
-            local base = pick_text("Base branch", { optional = true })
+            local head = finder.pick_branch({
+              prompt = "Head branch",
+              cwd = root,
+              remote = rem,
+              role = "head",
+              optional = true,
+            })
+            local base = finder.pick_branch({
+              prompt = "Base branch",
+              cwd = root,
+              remote = rem,
+              role = "base",
+              optional = true,
+            })
             local draft = false
             if caps.prs.draft then
               local choice = pick_choice("PR type", { "Ready", "Draft" })

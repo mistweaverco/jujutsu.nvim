@@ -235,4 +235,169 @@ function M.pick_remote(opts)
   return vim.split(selected, "%s+")[1]
 end
 
+---@param opts? { cwd?: string }
+---@return string[]
+function M.list_branches(opts)
+  opts = opts or {}
+  local cwd = opts.cwd or require("jujutsu.jj.repository").root() or vim.fn.getcwd()
+  local branches = {}
+  local seen = {}
+
+  local function add(name)
+    name = vim.trim(name or "")
+    if name == "" or seen[name] then return end
+    seen[name] = true
+    table.insert(branches, name)
+  end
+
+  local ok, lines = pcall(vim.fn.systemlist, {
+    "git",
+    "-C",
+    cwd,
+    "for-each-ref",
+    "--format=%(refname:short)",
+    "refs/heads",
+  })
+  if ok then
+    for _, line in ipairs(lines) do
+      add(line)
+    end
+  end
+
+  ok, lines = pcall(vim.fn.systemlist, {
+    "git",
+    "-C",
+    cwd,
+    "for-each-ref",
+    "--format=%(refname:short)",
+    "refs/remotes/origin",
+  })
+  if ok then
+    for _, line in ipairs(lines) do
+      if line ~= "origin/HEAD" then add(line:match("^origin/(.+)$") or line) end
+    end
+  end
+
+  return branches
+end
+
+---@param cwd? string
+---@return string|nil
+function M.current_branch(cwd)
+  cwd = cwd or require("jujutsu.jj.repository").root() or vim.fn.getcwd()
+  local ok, lines = pcall(vim.fn.systemlist, { "git", "-C", cwd, "branch", "--show-current" })
+  if not ok then return nil end
+  local cur = vim.trim(lines[1] or "")
+  return cur ~= "" and cur or nil
+end
+
+---@param opts? { cwd?: string, remote?: ForgeRemote }
+---@return string|nil
+function M.default_base_branch(opts)
+  opts = opts or {}
+  local cwd = opts.cwd or require("jujutsu.jj.repository").root() or vim.fn.getcwd()
+  local remote = opts.remote
+
+  if remote and remote.provider == "github" and vim.fn.executable("gh") == 1 then
+    local repo = remote.owner .. "/" .. remote.repo
+    local obj = vim
+      .system({
+        "gh",
+        "repo",
+        "view",
+        repo,
+        "--json",
+        "defaultBranchRef",
+        "-q",
+        ".defaultBranchRef.name",
+      }, { cwd = cwd, text = true })
+      :wait()
+    if obj.code == 0 then
+      local name = vim.trim(obj.stdout or "")
+      if name ~= "" then return name end
+    end
+  end
+
+  local ok, sym = pcall(vim.fn.systemlist, { "git", "-C", cwd, "symbolic-ref", "refs/remotes/origin/HEAD" })
+  if ok and sym[1] then
+    local name = sym[1]:match("refs/remotes/origin/(.+)$")
+    if name and name ~= "" then return name end
+  end
+
+  for _, candidate in ipairs({ "main", "master", "develop" }) do
+    for _, branch in ipairs(M.list_branches({ cwd = cwd })) do
+      if branch == candidate then return candidate end
+    end
+  end
+  return nil
+end
+
+---@class FinderBranchOpts
+---@field prompt? string
+---@field cwd? string
+---@field remote? ForgeRemote
+---@field role? "head"|"base"
+---@field default? string
+---@field optional? boolean
+
+---Pick a git branch (must run inside async.void / a coroutine).
+---@param opts FinderBranchOpts
+---@return string|nil nil when skipped or aborted
+function M.pick_branch(opts)
+  opts = opts or {}
+  if not coroutine.running() then error("jujutsu.finder.pick_branch must be called from async.void / a coroutine") end
+
+  local cwd = opts.cwd or require("jujutsu.jj.repository").root() or vim.fn.getcwd()
+  local branches = M.list_branches({ cwd = cwd })
+  local default = opts.default
+  if not default and opts.role == "head" then default = M.current_branch(cwd) end
+  if not default and opts.role == "base" then default = M.default_base_branch({ cwd = cwd, remote = opts.remote }) end
+
+  if #branches == 0 then
+    return M.input({
+      prompt = opts.prompt or "Branch",
+      default = default,
+      allow_empty = opts.optional == true,
+      placeholder = opts.optional and "Leave empty to use default" or nil,
+    })
+  end
+
+  local entries = {}
+  if opts.optional then table.insert(entries, "(use default)") end
+
+  local ordered = {}
+  local seen = {}
+  local function offer(name)
+    if not name or name == "" or seen[name] then return end
+    seen[name] = true
+    table.insert(ordered, name)
+  end
+  offer(default)
+  if opts.role == "head" then offer(M.current_branch(cwd)) end
+  for _, b in ipairs(branches) do
+    offer(b)
+  end
+  table.sort(ordered, function(a, b)
+    if a == default then return true end
+    if b == default then return false end
+    return a < b
+  end)
+
+  for _, b in ipairs(ordered) do
+    local label = b
+    if b == default then label = b .. " (default)" end
+    table.insert(entries, label)
+  end
+
+  local selected = M.pick({
+    prompt = opts.prompt or "Branch",
+    entries = entries,
+    allow_free_text = true,
+  })
+  if not selected then return nil end
+  selected = tostring(selected):gsub("%s+%(default%)$", "")
+  if selected == "(use default)" then return nil end
+  return selected
+end
+
 return M

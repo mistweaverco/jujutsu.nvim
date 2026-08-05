@@ -30,6 +30,8 @@ end
 
 ---@param opts FuzzyFinderOpts
 function M.open(opts)
+  local cursor_mod = require("jujutsu.ui.cursor")
+  cursor_mod.push_typing()
   local prompt = opts.prompt or "select"
   local allow_multi = opts.allow_multi or false
   local allow_free_text = opts.allow_free_text or false
@@ -72,6 +74,7 @@ function M.open(opts)
     closed = true
     if vim.api.nvim_win_is_valid(win) then vim.api.nvim_win_close(win, true) end
     if vim.api.nvim_buf_is_valid(bufnr) then vim.api.nvim_buf_delete(bufnr, { force = true }) end
+    cursor_mod.pop_typing()
     vim.schedule(function() opts.on_select(result) end)
   end
 
@@ -87,7 +90,7 @@ function M.open(opts)
 
   local function redraw()
     refilter()
-    local lines = { "> " .. query, string.rep("─", 40) }
+    local lines = { "> " .. query .. " ", string.rep("─", 40) }
     for i, item in ipairs(filtered) do
       local mark = selected[item.text] and "*" or " "
       local cur = i == cursor and ">" or " "
@@ -99,7 +102,7 @@ function M.open(opts)
     vim.bo[bufnr].modifiable = true
     vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
     vim.bo[bufnr].modifiable = false
-    pcall(vim.api.nvim_win_set_cursor, win, { math.min(cursor + 2, #lines), 0 })
+    pcall(vim.api.nvim_win_set_cursor, win, { 1, 2 + #query })
   end
 
   local function current() return filtered[cursor] and filtered[cursor].text end

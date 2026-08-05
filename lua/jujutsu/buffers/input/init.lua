@@ -13,6 +13,8 @@ local M = {}
 ---@param opts InputBufferOpts
 function M.open(opts)
   opts = opts or {}
+  local cursor_mod = require("jujutsu.ui.cursor")
+  cursor_mod.push_typing()
   local prompt = opts.prompt or "input"
   local allow_empty = opts.allow_empty == true
   local placeholder = opts.placeholder or (allow_empty and "Leave empty to skip" or "Type a value")
@@ -48,13 +50,15 @@ function M.open(opts)
     closed = true
     if vim.api.nvim_win_is_valid(win) then vim.api.nvim_win_close(win, true) end
     if vim.api.nvim_buf_is_valid(bufnr) then vim.api.nvim_buf_delete(bufnr, { force = true }) end
+    cursor_mod.pop_typing()
     vim.schedule(function() opts.on_submit(result) end)
   end
 
   local function redraw()
     local hint = string.format("<cr> confirm  <esc>/<c-c> abort%s", allow_empty and "  (empty ok)" or "")
+    local input_line = "> " .. value .. " "
     local lines = {
-      "> " .. value,
+      input_line,
       string.rep("─", 40),
       value == "" and ("  " .. placeholder) or "",
       "  " .. hint,
@@ -62,8 +66,7 @@ function M.open(opts)
     vim.bo[bufnr].modifiable = true
     vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
     vim.bo[bufnr].modifiable = false
-    local col = math.min(2 + #value, #("> " .. value))
-    pcall(vim.api.nvim_win_set_cursor, win, { 1, col })
+    pcall(vim.api.nvim_win_set_cursor, win, { 1, 2 + #value })
   end
 
   local function submit()
