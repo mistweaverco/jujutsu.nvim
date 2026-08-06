@@ -589,16 +589,9 @@ function M.post_reply(root, remote, number, opts)
 end
 
 ---@param filter ForgeSearchFilter
----@return string
-local function build_pr_search(filter)
+---@return string|nil search query when assignee/author/label/draft/query filters are set
+local function build_pr_search_extras(filter)
   local parts = {}
-  local state = filter.state or "open"
-  if state == "open" or state == "closed" or state == "merged" then
-    table.insert(parts, "is:" .. state)
-  elseif state ~= "all" then
-    table.insert(parts, "is:open")
-  end
-  table.insert(parts, "is:pr")
   if filter.assignee == "@me" then
     table.insert(parts, "assignee:@me")
   elseif filter.assignee and filter.assignee ~= "" then
@@ -616,7 +609,16 @@ local function build_pr_search(filter)
   end
   if filter.label and filter.label ~= "" then table.insert(parts, "label:" .. filter.label) end
   if filter.query and filter.query ~= "" then table.insert(parts, filter.query) end
+  if #parts == 0 then return nil end
   return table.concat(parts, " ")
+end
+
+---@param filter ForgeSearchFilter
+---@return string gh pr list --state value
+local function gh_pr_list_state(filter)
+  local state = filter.state or "open"
+  if state == "all" or state == "open" or state == "closed" or state == "merged" then return state end
+  return "open"
 end
 
 ---@param root string
@@ -627,17 +629,22 @@ function M.search_prs(root, _, filter)
   if not M.available() then return {}, "gh is not on PATH" end
   filter = filter or {}
   local limit = tostring(filter.limit or 50)
-  local search = build_pr_search(filter)
-  local res = run(root, {
+  local args = {
     "pr",
     "list",
-    "--search",
-    search,
+    "--state",
+    gh_pr_list_state(filter),
     "--limit",
     limit,
     "--json",
     "number,title,url,headRefName,baseRefName,headRefOid,baseRefOid,isDraft,state",
-  })
+  }
+  local search = build_pr_search_extras(filter)
+  if search then
+    table.insert(args, "--search")
+    table.insert(args, search)
+  end
+  local res = run(root, args)
   if res.code ~= 0 then return {}, res.stderr ~= "" and res.stderr or "failed to search PRs" end
   local ok, data = pcall(vim.json.decode, res.stdout)
   if not ok or type(data) ~= "table" then return {}, "invalid PR search JSON" end
