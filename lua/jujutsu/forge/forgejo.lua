@@ -858,11 +858,14 @@ function M.trigger_ci(_, remote, opts)
   opts = opts or {}
   if not opts.workflow_id then return false, "workflow_id required" end
   local ref = opts.ref or "main"
+  -- Forgejo/Gitea expect `inputs` as a JSON object. Lua `{}` encodes as `[]`.
+  local inputs = opts.inputs
+  if type(inputs) ~= "table" or next(inputs) == nil then inputs = vim.empty_dict() end
   local _, err = api(
     remote,
     "POST",
     string.format("/repos/%s/%s/actions/workflows/%s/dispatches", remote.owner, remote.repo, tostring(opts.workflow_id)),
-    { ref = ref, inputs = opts.inputs or {} }
+    { ref = ref, inputs = inputs }
   )
   if err then return false, err end
   return true

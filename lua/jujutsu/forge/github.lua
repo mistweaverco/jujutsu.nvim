@@ -1108,7 +1108,10 @@ function M.trigger_ci(root, remote, opts)
   local ref = opts.ref or "main"
   local path =
     string.format("repos/%s/%s/actions/workflows/%s/dispatches", remote.owner, remote.repo, tostring(opts.workflow_id))
-  local payload = { ref = ref, inputs = opts.inputs or {} }
+  -- GitHub expects `inputs` to be a JSON object. Lua `{}` encodes as `[]`.
+  local inputs = opts.inputs
+  if type(inputs) ~= "table" or next(inputs) == nil then inputs = vim.empty_dict() end
+  local payload = { ref = ref, inputs = inputs }
   local _, err = api_json(root, remote, path, "POST", payload)
   if err then return false, err end
   return true
