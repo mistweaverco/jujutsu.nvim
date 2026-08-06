@@ -18,6 +18,8 @@ function M.capabilities()
       merge = true,
       draft = true,
       labels = true,
+      assignees = true,
+      multi_assignees = true,
     },
     issues = {
       list = true,
@@ -26,6 +28,8 @@ function M.capabilities()
       update = true,
       close = true,
       labels = true,
+      assignees = true,
+      multi_assignees = true,
     },
     comments = { list = true, create = true, update = true, delete = true },
     ci = { list = true, cancel = true, trigger = true, view = true, logs = true },
@@ -333,6 +337,38 @@ end
 local function map_labels(labels)
   -- GitLab labels may be strings or objects with color / text_color
   return labels_mod.map(labels, { color_key = "color", text_color_key = "text_color" })
+end
+
+---@param users any
+---@return ForgeUser[]
+local function map_assignable_users(users)
+  local out = {}
+  if type(users) ~= "table" then return out end
+  for _, u in ipairs(users) do
+    if type(u) == "table" and u.username and u.username ~= "" then
+      table.insert(out, { login = u.username, name = u.name, id = u.id })
+    end
+  end
+  return out
+end
+
+---@param root string
+---@param remote { owner: string, repo: string }
+---@param logins string[]
+---@return integer[]|nil, string|nil
+local function assignee_ids_for_logins(root, remote, logins)
+  local users, err = M.list_assignable_users(root, remote)
+  if err then return nil, err end
+  local by_login = {}
+  for _, u in ipairs(users) do
+    by_login[u.login] = u.id
+  end
+  local ids = {}
+  for _, login in ipairs(logins or {}) do
+    local id = by_login[login]
+    if id then table.insert(ids, id) end
+  end
+  return ids, nil
 end
 
 ---@param users any
@@ -645,7 +681,7 @@ end
 ---@param root string
 ---@param remote { owner: string, repo: string }
 ---@param number integer|string
----@param opts { title?: string, body?: string, base?: string, draft?: boolean, labels?: string[] }
+---@param opts { title?: string, body?: string, base?: string, draft?: boolean, labels?: string[], assignees?: string[] }
 ---@return boolean, string|nil
 function M.update_pr(root, remote, number, opts)
   if not M.available() then return false, "glab is not on PATH" end
@@ -656,6 +692,11 @@ function M.update_pr(root, remote, number, opts)
   if opts.base then payload.target_branch = opts.base end
   if opts.draft ~= nil then payload.draft = opts.draft end
   if opts.labels then payload.labels = opts.labels end
+  if opts.assignees then
+    local ids, err = assignee_ids_for_logins(root, remote, opts.assignees)
+    if err then return false, err end
+    payload.assignee_ids = ids
+  end
   local _, err = resource_api(root, remote, "merge_requests", number, "PUT", "", payload)
   if err then return false, err end
   return true
@@ -696,6 +737,17 @@ function M.list_repo_labels(root, remote)
   if err then return {}, err end
   if type(data) ~= "table" then return {}, nil end
   return map_labels(data), nil
+end
+
+---@param root string
+---@param remote { owner: string, repo: string }
+---@return ForgeUser[], string|nil
+function M.list_assignable_users(root, remote)
+  if not M.available() then return {}, "glab is not on PATH" end
+  local data, err = project_api(root, remote, "GET", "/members/all?per_page=100")
+  if err then return {}, err end
+  if type(data) ~= "table" then return {}, nil end
+  return map_assignable_users(data), nil
 end
 
 ---@param root string
@@ -758,7 +810,7 @@ end
 ---@param root string
 ---@param remote { owner: string, repo: string }
 ---@param number integer|string
----@param opts { title?: string, body?: string, labels?: string[], state?: string }
+---@param opts { title?: string, body?: string, labels?: string[], assignees?: string[], state?: string }
 ---@return boolean, string|nil
 function M.update_issue(root, remote, number, opts)
   if not M.available() then return false, "glab is not on PATH" end
@@ -767,6 +819,11 @@ function M.update_issue(root, remote, number, opts)
   if opts.title then payload.title = opts.title end
   if opts.body ~= nil then payload.description = opts.body end
   if opts.labels then payload.labels = opts.labels end
+  if opts.assignees then
+    local ids, err = assignee_ids_for_logins(root, remote, opts.assignees)
+    if err then return false, err end
+    payload.assignee_ids = ids
+  end
   if opts.state == "closed" then
     payload.state_event = "close"
   elseif opts.state == "open" or opts.state == "opened" then

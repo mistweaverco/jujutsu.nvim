@@ -32,7 +32,7 @@ end
 ---@param opts FuzzyFinderOpts
 function M.open(opts)
   local cursor_mod = require("jujutsu.ui.cursor")
-  cursor_mod.push_typing()
+  cursor_mod.push_typing({ insert_capable = true })
   local prompt = opts.prompt or "select"
   local allow_multi = opts.allow_multi or false
   local allow_free_text = opts.allow_free_text or false
@@ -45,12 +45,18 @@ function M.open(opts)
   local selected = {}
   local filtered = {}
   local closed = false
+  local result_set = false
+  local result_value = nil ---@type string|string[]|nil
+  local redrawing = false
+  local ns = vim.api.nvim_create_namespace("jujutsu-finder")
+  local augroup = vim.api.nvim_create_augroup("JujutsuFinder" .. tostring(vim.uv.hrtime()), { clear = true })
 
   local height = math.max(10, math.floor(vim.o.lines * 0.4))
   local bufnr = vim.api.nvim_create_buf(false, true)
   vim.bo[bufnr].buftype = "nofile"
   vim.bo[bufnr].bufhidden = "wipe"
   vim.bo[bufnr].swapfile = false
+  vim.bo[bufnr].modifiable = true
   vim.bo[bufnr].filetype = "jujutsu-finder"
 
   local win = vim.api.nvim_open_win(bufnr, true, {
@@ -66,18 +72,33 @@ function M.open(opts)
     focusable = true,
     zindex = 200,
   })
-  vim.wo[win].cursorline = true
+  vim.wo[win].cursorline = false
   vim.wo[win].number = false
+  vim.wo[win].wrap = false
+  vim.wo[win].signcolumn = "no"
   if type(opts.on_open) == "function" then opts.on_open(win, bufnr) end
 
-  local function close(result)
+  local function teardown()
     if closed then return end
     closed = true
-    if vim.api.nvim_win_is_valid(win) then vim.api.nvim_win_close(win, true) end
-    if vim.api.nvim_buf_is_valid(bufnr) then vim.api.nvim_buf_delete(bufnr, { force = true }) end
-    cursor_mod.pop_typing()
-    vim.schedule(function() opts.on_select(result) end)
+    pcall(vim.api.nvim_del_augroup_by_id, augroup)
+    pcall(vim.cmd, "stopinsert")
+    vim.schedule(function()
+      if win and vim.api.nvim_win_is_valid(win) then pcall(vim.api.nvim_win_close, win, true) end
+      if bufnr and vim.api.nvim_buf_is_valid(bufnr) then pcall(vim.api.nvim_buf_delete, bufnr, { force = true }) end
+      cursor_mod.pop_typing({ insert_capable = true })
+      opts.on_select(result_value)
+    end)
   end
+
+  local function finish(result)
+    if result_set then return end
+    result_set = true
+    result_value = result
+    teardown()
+  end
+
+  local function abort() finish(nil) end
 
   local function refilter()
     filtered = {}
@@ -86,27 +107,71 @@ function M.open(opts)
       if s then table.insert(filtered, { text = text, score = s }) end
     end
     table.sort(filtered, function(a, b) return a.score > b.score end)
-    cursor = math.max(1, math.min(cursor, #filtered))
+    cursor = math.max(1, math.min(cursor, math.max(#filtered, 1)))
   end
 
+  local function current() return filtered[cursor] and filtered[cursor].text end
+
   local function redraw()
+    if closed or not vim.api.nvim_buf_is_valid(bufnr) then return end
+    redrawing = true
     refilter()
-    local lines = { "> " .. query .. " ", string.rep("─", 40) }
+
+    local col = 2 + #query
+    if vim.api.nvim_win_is_valid(win) then
+      local ok, cur = pcall(vim.api.nvim_win_get_cursor, win)
+      if ok and cur and cur[1] == 1 then col = math.max(2, cur[2]) end
+    end
+
+    local lines = { "> " .. query }
+    local max_results = math.max(1, height - 2)
+    local shown = 0
     for i, item in ipairs(filtered) do
+      if shown >= max_results then break end
       local mark = selected[item.text] and "*" or " "
       local cur = i == cursor and ">" or " "
       table.insert(lines, string.format("%s%s %s", cur, mark, item.text))
+      shown = shown + 1
     end
     if #filtered == 0 then
       table.insert(lines, allow_free_text and "  (no matches - Enter to use typed text)" or "  (no matches)")
     end
-    vim.bo[bufnr].modifiable = true
+
+    local hint = allow_multi and "<cr> confirm  <tab> toggle  <c-n>/<c-p> move  <esc> abort  <c-l> refresh"
+      or "<cr> confirm  <c-n>/<c-p> move  <esc> abort  <c-l> refresh"
     vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
-    vim.bo[bufnr].modifiable = false
-    pcall(vim.api.nvim_win_set_cursor, win, { 1, 2 + #query })
+    vim.api.nvim_buf_clear_namespace(bufnr, ns, 0, -1)
+    vim.api.nvim_buf_set_extmark(bufnr, ns, 0, 0, {
+      virt_lines = { { { "  " .. hint, "Comment" } } },
+      virt_lines_above = false,
+    })
+
+    if vim.api.nvim_win_is_valid(win) then
+      local max_col = 2 + #query
+      pcall(vim.api.nvim_win_set_cursor, win, { 1, math.min(col, max_col) })
+    end
+    redrawing = false
   end
 
-  local function current() return filtered[cursor] and filtered[cursor].text end
+  local function sync_query_from_buf()
+    if closed or redrawing then return end
+    local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+    -- Collapse multi-line paste into the query line.
+    local raw = lines[1] or ""
+    if #lines > 1 then
+      for i = 2, #lines do
+        -- Ignore result lines we rendered (start with ">/ " markers or spaces).
+        local l = lines[i]
+        if l and not l:match("^[> ][* ] ") and not l:match("^%s*%(no matches") then raw = raw .. l end
+      end
+    end
+    local next_query = raw:gsub("^>%s?", ""):gsub("[\r\n]", "")
+    if next_query ~= query then
+      query = next_query
+      cursor = 1
+    end
+    redraw()
+  end
 
   local function do_select()
     if allow_multi then
@@ -115,22 +180,47 @@ function M.open(opts)
         if on then table.insert(list, t) end
       end
       if #list == 0 and current() then list = { current() } end
-      close(#list > 0 and list or nil)
+      finish(#list > 0 and list or nil)
     else
       local value = current()
       if not value and allow_free_text then
         value = query:match("^%s*(.-)%s*$")
         if value == "" then value = nil end
       end
-      close(value)
+      finish(value)
     end
   end
 
-  local map = function(key, fn) vim.keymap.set("n", key, fn, { buffer = bufnr, silent = true, nowait = true }) end
+  local function move(delta)
+    if #filtered == 0 then return end
+    cursor = math.max(1, math.min(cursor + delta, #filtered))
+    redraw()
+  end
 
-  map("<cr>", do_select)
-  map("<c-c>", function() close(nil) end)
-  map("<c-r>", function()
+  local map = function(modes, key, fn)
+    vim.keymap.set(modes, key, fn, { buffer = bufnr, silent = true, noremap = true, nowait = true })
+  end
+
+  map({ "n", "i" }, "<cr>", function() vim.schedule(do_select) end)
+  map({ "n", "i" }, "<c-c>", function() vim.schedule(abort) end)
+  map({ "n", "i" }, "<esc>", function() vim.schedule(abort) end)
+  map("n", "q", function() vim.schedule(abort) end)
+  map({ "n", "i" }, "<c-n>", function() move(1) end)
+  map({ "n", "i" }, "<down>", function() move(1) end)
+  map({ "n", "i" }, "<c-p>", function() move(-1) end)
+  map({ "n", "i" }, "<up>", function() move(-1) end)
+  map({ "n", "i" }, "<tab>", function()
+    if allow_multi and current() then
+      selected[current()] = not selected[current()]
+      cursor = math.min(cursor + 1, math.max(#filtered, 1))
+      redraw()
+    elseif current() then
+      query = current()
+      redraw()
+    end
+  end)
+  -- Keep insert-mode <C-r> free for register paste; use <C-l> for cache refresh.
+  map({ "n", "i" }, "<c-l>", function()
     local cache = require("jujutsu.forge.cache")
     if type(opts.on_refresh) == "function" then
       cache.with_refresh(function() opts.on_refresh() end)
@@ -140,75 +230,37 @@ function M.open(opts)
       require("jujutsu.notify").info("Forge cache cleared")
     end
   end)
-  map("<esc>", function() close(nil) end)
-  map("q", function() close(nil) end)
-  map("<c-n>", function()
-    cursor = math.min(cursor + 1, #filtered)
-    redraw()
-  end)
-  map("<down>", function()
-    cursor = math.min(cursor + 1, #filtered)
-    redraw()
-  end)
-  map("j", function()
-    cursor = math.min(cursor + 1, #filtered)
-    redraw()
-  end)
-  map("<c-p>", function()
-    cursor = math.max(cursor - 1, 1)
-    redraw()
-  end)
-  map("<up>", function()
-    cursor = math.max(cursor - 1, 1)
-    redraw()
-  end)
-  map("k", function()
-    cursor = math.max(cursor - 1, 1)
-    redraw()
-  end)
-  map("<bs>", function()
-    query = query:sub(1, -2)
-    cursor = 1
-    redraw()
-  end)
-  map("<c-h>", function()
-    query = query:sub(1, -2)
-    cursor = 1
-    redraw()
-  end)
-  map("<c-u>", function()
-    query = ""
-    cursor = 1
-    redraw()
-  end)
-  map("<space>", function()
-    if allow_multi and current() then
-      selected[current()] = not selected[current()]
-      cursor = math.min(cursor + 1, #filtered)
-      redraw()
-    else
-      query = query .. " "
-      cursor = 1
-      redraw()
-    end
-  end)
-  map("<tab>", function()
-    if current() then
-      query = current()
-      redraw()
-    end
-  end)
 
-  -- Type to filter: map a-z, A-Z, 0-9, punctuation
-  local chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._/@:-~^"
-  for i = 1, #chars do
-    local ch = chars:sub(i, i)
-    map(ch, function()
-      query = query .. ch
-      cursor = 1
-      redraw()
-    end)
-  end
+  vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
+    group = augroup,
+    buffer = bufnr,
+    callback = sync_query_from_buf,
+  })
+
+  -- Keep the cursor on the query line while typing.
+  vim.api.nvim_create_autocmd({ "CursorMoved", "CursorMovedI" }, {
+    group = augroup,
+    buffer = bufnr,
+    callback = function()
+      if closed or redrawing or not vim.api.nvim_win_is_valid(win) then return end
+      local cur = vim.api.nvim_win_get_cursor(win)
+      if cur[1] ~= 1 then
+        local col = math.min(cur[2], 2 + #query)
+        pcall(vim.api.nvim_win_set_cursor, win, { 1, math.max(2, col) })
+      elseif cur[2] < 2 then
+        pcall(vim.api.nvim_win_set_cursor, win, { 1, 2 })
+      end
+    end,
+  })
+
+  vim.api.nvim_create_autocmd("WinClosed", {
+    group = augroup,
+    pattern = tostring(win),
+    once = true,
+    callback = function()
+      if not result_set then abort() end
+    end,
+  })
 
   redraw()
   -- Closing another UI (e.g. Diff popup) before open can leave focus elsewhere.
@@ -216,6 +268,8 @@ function M.open(opts)
     if closed then return end
     if vim.api.nvim_win_is_valid(win) and vim.api.nvim_get_current_win() ~= win then
       pcall(vim.api.nvim_set_current_win, win)
+      local mode = vim.api.nvim_get_mode().mode
+      if not mode:match("^[iR]") then pcall(vim.cmd, "startinsert") end
       pcall(vim.cmd, "redraw")
     end
   end
@@ -223,6 +277,7 @@ function M.open(opts)
   for _, delay in ipairs({ 10, 30, 60, 100, 180, 300, 500, 800, 1200 }) do
     vim.defer_fn(reclaim, delay)
   end
+  vim.cmd("startinsert!")
 end
 
 ---@param opts { prompt?: string, entries: any[], allow_multi?: boolean, allow_free_text?: boolean }

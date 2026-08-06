@@ -205,14 +205,18 @@ you submit or yank markdown.
 
 
 > [!NOTE]
-> Bitbucket Token needs:
+> Bitbucket API token scopes (create at [id.atlassian.com](https://id.atlassian.com/manage-profile/security/api-tokens)):
 > - `read:pullrequest:bitbucket`
-> - `read:issue:bitbucket`
-> - `read:issue:bitbucket`
-> - `read:pipeline:bitbucket`
-> - `write:issue:bitbucket`
-> - `write:pipeline:bitbucket`
 > - `write:pullrequest:bitbucket`
+> - `read:issue:bitbucket`
+> - `write:issue:bitbucket`
+> - `read:pipeline:bitbucket`
+> - `write:pipeline:bitbucket`
+> - `read:workspace:bitbucket` - **required to list assignees / PR reviewers** (workspace members). Without it, the assignee picker shows “No assignable users found”.
+>
+> After adding scopes,
+> delete the stored entry (or reenter credentials on the next 401) so the new token is used.
+> Credentials live under `stdpath("data")/jujutsu/credentials.json`.
 
 On HTTP 401, review asks whether to supply new credentials or delete the stored ones.
 

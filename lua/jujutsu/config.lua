@@ -138,6 +138,7 @@ local defaults = {
       delete_comment = "x",
       edit_topic = "E",
       labels = "l",
+      assignees = "a",
       close_topic = "C",
       open = "I",
       browser = "o",

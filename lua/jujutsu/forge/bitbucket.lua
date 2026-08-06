@@ -18,6 +18,8 @@ function M.capabilities()
       merge = true,
       draft = false,
       labels = false,
+      assignees = true,
+      multi_assignees = true,
     },
     issues = {
       list = true,
@@ -26,6 +28,8 @@ function M.capabilities()
       update = true,
       close = true,
       labels = false,
+      assignees = true,
+      multi_assignees = false,
     },
     comments = { list = true, create = true, update = true, delete = true },
     ci = { list = true, cancel = true, trigger = true, view = true, logs = true },
@@ -274,6 +278,57 @@ local function fetch_all(remote, url)
     next_url = type(result.next) == "string" and result.next or ""
   end
   return values, nil
+end
+
+---@param user table|nil
+---@return string|nil
+local function user_login(user)
+  if not user or type(user) ~= "table" then return nil end
+  if user.nickname and user.nickname ~= "" then return user.nickname end
+  -- Prefer account_id over display_name: Bitbucket deprecated usernames and
+  -- display_name is not stable / unique enough for API updates.
+  if user.account_id and user.account_id ~= "" then return user.account_id end
+  if user.display_name and user.display_name ~= "" then return user.display_name end
+  return nil
+end
+
+---@param values table[]
+---@return ForgeUser[]
+local function map_assignable_users(values)
+  local out = {}
+  local seen = {}
+  for _, item in ipairs(values or {}) do
+    local u = item.user or item
+    if type(u) == "table" then
+      local login = user_login(u)
+      if login and not seen[login] then
+        seen[login] = true
+        table.insert(out, { login = login, name = u.display_name, id = u.account_id })
+      end
+    end
+  end
+  table.sort(out, function(a, b) return (a.name or a.login):lower() < (b.name or b.login):lower() end)
+  return out
+end
+
+---@param _ string
+---@param remote { owner: string, repo: string }
+---@param logins string[]
+---@return string[]|nil, string|nil
+local function account_ids_for_logins(_, remote, logins)
+  local users, err = M.list_assignable_users(_, remote)
+  if err then return nil, err end
+  local by_login = {}
+  for _, u in ipairs(users) do
+    by_login[u.login] = u.id
+    if u.id then by_login[u.id] = u.id end
+  end
+  local ids = {}
+  for _, login in ipairs(logins or {}) do
+    local id = by_login[login]
+    if id then table.insert(ids, id) end
+  end
+  return ids, nil
 end
 
 ---@param remote { owner: string, repo: string }
@@ -574,7 +629,10 @@ function M.get_topic(_, remote, number, opts)
     local html = ""
     if issue.links and issue.links.html and issue.links.html.href then html = issue.links.html.href end
     local assignees = {}
-    if issue.assignee and issue.assignee.display_name then table.insert(assignees, issue.assignee.display_name) end
+    if issue.assignee then
+      local login = user_login(issue.assignee)
+      if login then table.insert(assignees, login) end
+    end
     return {
       kind = "issue",
       number = issue.id or number,
@@ -605,8 +663,9 @@ function M.get_topic(_, remote, number, opts)
   local author = "unknown"
   if raw.author then author = raw.author.display_name or raw.author.nickname or author end
   local reviewers = {}
-  for _, p in ipairs(raw.participants or {}) do
-    if p.user then table.insert(reviewers, p.user.display_name or p.user.nickname or "?") end
+  for _, u in ipairs(raw.reviewers or {}) do
+    local login = user_login(u)
+    if login then table.insert(reviewers, login) end
   end
   return {
     kind = "pr",
@@ -736,14 +795,19 @@ function M.search_prs(_root, remote, filter)
   local state = string.upper(filter.state or "OPEN")
   if state == "OPENED" then state = "OPEN" end
   if state == "CLOSED" then state = "DECLINED" end
-  if state == "ALL" then state = nil end
   local endpoint = string.format(
     "/repositories/%s/%s/pullrequests?pagelen=%s",
     remote.owner,
     remote.repo,
     tostring(filter.limit or 50)
   )
-  if state then endpoint = endpoint .. "&state=" .. state end
+  -- Bitbucket defaults to OPEN when `state` is omitted. For "all", repeat
+  -- `state` for each value (OPEN / MERGED / DECLINED / SUPERSEDED).
+  if state == "ALL" then
+    endpoint = endpoint .. "&state=OPEN&state=MERGED&state=DECLINED&state=SUPERSEDED"
+  else
+    endpoint = endpoint .. "&state=" .. state
+  end
   if filter.query and filter.query ~= "" then endpoint = endpoint .. "&q=title~%22" .. filter.query .. "%22" end
   local values, err = fetch_all(remote, endpoint)
   if err then return {}, err end
@@ -799,7 +863,7 @@ end
 ---@param _ string
 ---@param remote { owner: string, repo: string }
 ---@param number integer|string
----@param opts { title?: string, body?: string }
+---@param opts { title?: string, body?: string, assignees?: string[] }
 ---@return boolean, string|nil
 function M.update_pr(_, remote, number, opts)
   if not M.available(remote) then return false, "Bitbucket credentials missing or curl unavailable" end
@@ -808,6 +872,15 @@ function M.update_pr(_, remote, number, opts)
   if opts.title then payload.title = opts.title end
   -- Bitbucket returns description as a rich-text object; updates take a plain string.
   if opts.body ~= nil then payload.description = opts.body end
+  if opts.assignees then
+    local ids, err = account_ids_for_logins(_, remote, opts.assignees)
+    if err then return false, err end
+    local reviewers = {}
+    for _, id in ipairs(ids or {}) do
+      table.insert(reviewers, { account_id = id })
+    end
+    payload.reviewers = reviewers
+  end
   if next(payload) == nil then return true end
   local _, err = api(
     remote,
@@ -856,6 +929,40 @@ end
 ---@param _ { owner: string, repo: string }
 ---@return ForgeLabel[], string|nil
 function M.list_repo_labels(_, _) return {}, nil end
+
+---@param _ string
+---@param remote { owner: string, repo: string }
+---@return ForgeUser[], string|nil
+function M.list_assignable_users(_, remote)
+  if not M.available(remote) then return {}, "Bitbucket credentials missing or curl unavailable" end
+  -- Workspace members is the reliable source. Requires API token scope
+  -- `read:workspace:bitbucket` (see README / :help jujutsu-review).
+  local members_path = string.format(
+    "/workspaces/%s/members?pagelen=100&fields=values.user.display_name,values.user.nickname,values.user.account_id,values.user.uuid",
+    remote.owner
+  )
+  local values, err = fetch_all(remote, members_path)
+  if err then
+    local hint = ""
+    if err:match("HTTP 403") or err:match("HTTP 401") or err:match("[Pp]ermission") or err:match("[Aa]ccess") then
+      hint = " (API token needs the read:workspace:bitbucket scope to list assignees/reviewers)"
+    end
+    return {}, err .. hint
+  end
+  local users = map_assignable_users(values)
+  if #users > 0 then return users, nil end
+
+  -- Fallback: default reviewers (often empty; does not need workspace scope).
+  values, err =
+    fetch_all(remote, string.format("/repositories/%s/%s/default-reviewers?pagelen=100", remote.owner, remote.repo))
+  if err then return {}, err end
+  users = map_assignable_users(values)
+  if #users == 0 then
+    return {},
+      "No assignable users found. Grant your Bitbucket API token the read:workspace:bitbucket scope (and ensure the workspace has members)."
+  end
+  return users, nil
+end
 
 ---@param _ string
 ---@param remote { owner: string, repo: string }
@@ -919,7 +1026,7 @@ end
 ---@param _ string
 ---@param remote { owner: string, repo: string }
 ---@param number integer|string
----@param opts { title?: string, body?: string, state?: string }
+---@param opts { title?: string, body?: string, state?: string, assignees?: string[] }
 ---@return boolean, string|nil
 function M.update_issue(_, remote, number, opts)
   if not M.available(remote) then return false, "Bitbucket credentials missing or curl unavailable" end
@@ -927,6 +1034,16 @@ function M.update_issue(_, remote, number, opts)
   local payload = {}
   if opts.title then payload.title = opts.title end
   if opts.body ~= nil then payload.content = { raw = opts.body, markup = "markdown" } end
+  if opts.assignees then
+    if #opts.assignees == 0 then
+      payload.assignee = vim.NIL
+    else
+      local ids, err = account_ids_for_logins(_, remote, { opts.assignees[1] })
+      if err then return false, err end
+      if not ids or not ids[1] then return false, "Unknown assignee" end
+      payload.assignee = { account_id = ids[1] }
+    end
+  end
   if opts.state == "closed" then
     payload.state = { name = "closed" }
   elseif opts.state == "open" then

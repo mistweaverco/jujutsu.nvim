@@ -24,6 +24,8 @@ function M.capabilities()
       merge = true,
       draft = true,
       labels = true,
+      assignees = true,
+      multi_assignees = true,
     },
     issues = {
       list = true,
@@ -32,6 +34,8 @@ function M.capabilities()
       update = true,
       close = true,
       labels = true,
+      assignees = true,
+      multi_assignees = true,
     },
     comments = { list = true, create = true, update = true, delete = true },
     ci = { list = true, cancel = true, trigger = true, view = true, logs = true },
@@ -703,7 +707,7 @@ end
 ---@param root string
 ---@param remote { owner: string, repo: string }
 ---@param number integer|string
----@param opts { title?: string, body?: string, base?: string, draft?: boolean, labels?: string[] }
+---@param opts { title?: string, body?: string, base?: string, draft?: boolean, labels?: string[], assignees?: string[] }
 ---@return boolean, string|nil
 function M.update_pr(root, remote, number, opts)
   if not M.available() then return false, "gh is not on PATH" end
@@ -718,9 +722,12 @@ function M.update_pr(root, remote, number, opts)
     local _, err = api_json(root, remote, path, "PATCH", payload)
     if err then return false, err end
   end
-  if opts.labels then
+  if opts.labels or opts.assignees then
     local issue_path = string.format("repos/%s/%s/issues/%s", remote.owner, remote.repo, tostring(number))
-    local _, err = api_json(root, remote, issue_path, "PATCH", { labels = opts.labels })
+    local issue_payload = {}
+    if opts.labels then issue_payload.labels = opts.labels end
+    if opts.assignees then issue_payload.assignees = opts.assignees end
+    local _, err = api_json(root, remote, issue_path, "PATCH", issue_payload)
     if err then return false, err end
   end
   return true
@@ -769,6 +776,31 @@ function M.list_repo_labels(root, remote)
   if err then return {}, err end
   if type(data) ~= "table" then return {}, nil end
   return map_labels(data), nil
+end
+
+---@param users any
+---@return ForgeUser[]
+local function map_assignable_users(users)
+  local out = {}
+  if type(users) ~= "table" then return out end
+  for _, u in ipairs(users) do
+    if type(u) == "table" and u.login and u.login ~= "" then
+      table.insert(out, { login = u.login, name = u.name, id = u.id })
+    end
+  end
+  return out
+end
+
+---@param root string
+---@param remote { owner: string, repo: string }
+---@return ForgeUser[], string|nil
+function M.list_assignable_users(root, remote)
+  if not M.available() then return {}, "gh is not on PATH" end
+  local path = string.format("repos/%s/%s/assignees?per_page=100", remote.owner, remote.repo)
+  local data, err = api_json(root, remote, path)
+  if err then return {}, err end
+  if type(data) ~= "table" then return {}, nil end
+  return map_assignable_users(data), nil
 end
 
 ---@param filter ForgeSearchFilter
@@ -849,7 +881,7 @@ end
 ---@param root string
 ---@param remote { owner: string, repo: string }
 ---@param number integer|string
----@param opts { title?: string, body?: string, labels?: string[], state?: string }
+---@param opts { title?: string, body?: string, labels?: string[], assignees?: string[], state?: string }
 ---@return boolean, string|nil
 function M.update_issue(root, remote, number, opts)
   if not M.available() then return false, "gh is not on PATH" end
@@ -859,6 +891,7 @@ function M.update_issue(root, remote, number, opts)
   if opts.title then payload.title = opts.title end
   if opts.body ~= nil then payload.body = opts.body end
   if opts.labels then payload.labels = opts.labels end
+  if opts.assignees then payload.assignees = opts.assignees end
   if opts.state then payload.state = opts.state end
   local _, err = api_json(root, remote, path, "PATCH", payload)
   if err then return false, err end

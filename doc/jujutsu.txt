@@ -288,8 +288,21 @@ Providers: ~
 
 Credentials for Bitbucket / Forgejo are stored under
 `stdpath("data")/jujutsu/credentials.json`. HTTP 401 prompts to
-update or delete stored credentials. Bitbucket approve / request-changes
-needs an Atlassian API token with `write:pullrequest:bitbucket`.
+update or delete stored credentials.
+
+Bitbucket API token scopes: ~
+  read:pullrequest:bitbucket / write:pullrequest:bitbucket
+  read:issue:bitbucket / write:issue:bitbucket
+  read:pipeline:bitbucket / write:pipeline:bitbucket
+  read:workspace:bitbucket
+    Required to list assignees and PR reviewers (workspace members).
+    Without it the issue-panel assignee picker (`a`) reports
+    "No assignable users found". Create/update tokens at
+    https://id.atlassian.com/manage-profile/security/api-tokens
+    then re-enter or delete the stored credentials so the new
+    token is picked up.
+
+Approve / request-changes needs `write:pullrequest:bitbucket`.
 
 Entry points: ~
 - Forge popup `g` then `r`

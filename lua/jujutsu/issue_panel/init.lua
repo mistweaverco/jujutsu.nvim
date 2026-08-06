@@ -324,7 +324,7 @@ local function edit_labels(state)
     pcall(vim.cmd, "redraw!")
     if coroutine.running() then async.sleep(50) end
     local selected = finder.pick({
-      prompt = "Select labels (space toggle, enter confirm)",
+      prompt = "Select labels (tab toggle, enter confirm)",
       entries = entries,
       allow_multi = true,
     })
@@ -346,6 +346,98 @@ local function edit_labels(state)
       return
     end
     notify.info("Labels updated")
+    fetch_and_render(state)
+  end)
+end
+
+---@param user ForgeUser
+---@return string
+local function assignee_display(user)
+  if user.name and user.name ~= "" and user.name ~= user.login then return user.name .. " (@" .. user.login .. ")" end
+  return user.login
+end
+
+---@param state IssuePanelState
+local function edit_assignees(state)
+  local caps = provider.capabilities(state.remote)
+  local can = (state.kind == "pr" and caps.prs.assignees) or (state.kind == "issue" and caps.issues.assignees)
+  if not can then
+    notify.warn("Assignees are not supported for " .. state.remote.provider)
+    return
+  end
+  local multi = (state.kind == "pr" and caps.prs.multi_assignees) or caps.issues.multi_assignees
+  async.void(function()
+    local users, err = provider.list_assignable_users(state.root, state.remote)
+    if err then
+      notify.error(err)
+      return
+    end
+    if #users == 0 then
+      notify.warn("No assignable users found")
+      return
+    end
+    local current = {}
+    for _, a in ipairs(state.topic and state.topic.assignees or {}) do
+      current[a] = true
+    end
+    local text_to_login = {}
+    local entries = {}
+    local none_key = "__none__"
+    if not multi then
+      local has = next(current) ~= nil
+      local none_text = has and "[ ] (none)" or "[x] (none)"
+      text_to_login[none_text] = none_key
+      table.insert(entries, { text = none_text })
+    end
+    for _, user in ipairs(users) do
+      local mark = current[user.login] and "[x] " or "[ ] "
+      local text = mark .. assignee_display(user)
+      text_to_login[text] = user.login
+      table.insert(entries, { text = text })
+    end
+    local prompt
+    if state.remote.provider == "bitbucket" and state.kind == "pr" then
+      prompt = multi and "Select reviewers (tab toggle, enter confirm)" or "Select reviewer"
+    elseif multi then
+      prompt = "Select assignees (tab toggle, enter confirm)"
+    else
+      prompt = "Select assignee"
+    end
+    pcall(vim.cmd, "redraw!")
+    if coroutine.running() then async.sleep(50) end
+    local selected = finder.pick({
+      prompt = prompt,
+      entries = entries,
+      allow_multi = multi,
+    })
+    if not selected then return end
+    local logins = {}
+    local list = type(selected) == "table" and selected or { selected }
+    for _, s in ipairs(list) do
+      local login = text_to_login[tostring(s)]
+      if login == none_key then
+        logins = {}
+        break
+      elseif login and login ~= "" then
+        table.insert(logins, login)
+      end
+    end
+    if not multi and #logins > 1 then logins = { logins[1] } end
+    local ok, uerr
+    if state.kind == "pr" then
+      ok, uerr = provider.update_pr(state.root, state.number, { assignees = logins }, state.remote)
+    else
+      ok, uerr = provider.update_issue(state.root, state.number, { assignees = logins }, state.remote)
+    end
+    if not ok then
+      notify.error(uerr or "Failed to update assignees")
+      return
+    end
+    if state.remote.provider == "bitbucket" and state.kind == "pr" then
+      notify.info("Reviewers updated")
+    else
+      notify.info("Assignees updated")
+    end
     fetch_and_render(state)
   end)
 end
@@ -431,6 +523,7 @@ local function bind_keymaps(state)
   map(keys.delete_comment or "x", function() delete_comment(state) end, "DeleteComment")
   map(keys.edit_topic or "E", function() edit_topic(state) end, "EditTopic")
   map(keys.labels or "l", function() edit_labels(state) end, "Labels")
+  map(keys.assignees or "a", function() edit_assignees(state) end, "Assignees")
   map(keys.close_topic or "C", function() close_topic(state) end, "CloseTopic")
   map(keys.browser or "o", function()
     local url = state.topic and state.topic.url

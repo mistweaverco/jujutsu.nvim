@@ -9,8 +9,13 @@ local remote_mod = require("jujutsu.forge.remote")
 local M = {}
 
 ---@class ForgeCapabilities
----@field prs { list: boolean, search: boolean, create: boolean, update: boolean, close: boolean, merge: boolean, draft: boolean, labels: boolean }
----@field issues { list: boolean, search: boolean, create: boolean, update: boolean, close: boolean, labels: boolean }
+---@field prs { list: boolean, search: boolean, create: boolean, update: boolean, close: boolean, merge: boolean, draft: boolean, labels: boolean, assignees: boolean, multi_assignees: boolean }
+---@field issues { list: boolean, search: boolean, create: boolean, update: boolean, close: boolean, labels: boolean, assignees: boolean, multi_assignees: boolean }
+
+---@class ForgeUser
+---@field login string
+---@field name? string
+---@field id? integer
 ---@field comments { list: boolean, create: boolean, update: boolean, delete: boolean }
 ---@field ci { list: boolean, cancel: boolean, trigger: boolean, view: boolean, logs: boolean }
 
@@ -105,6 +110,8 @@ local function empty_caps()
       merge = false,
       draft = false,
       labels = false,
+      assignees = false,
+      multi_assignees = false,
     },
     issues = {
       list = false,
@@ -113,6 +120,8 @@ local function empty_caps()
       update = false,
       close = false,
       labels = false,
+      assignees = false,
+      multi_assignees = false,
     },
     comments = { list = false, create = false, update = false, delete = false },
     ci = { list = false, cancel = false, trigger = false, view = false, logs = false },
@@ -439,6 +448,17 @@ function M.list_repo_labels(root, remote)
   if type(mod.list_repo_labels) ~= "function" then return {}, nil end
   local list, err = mod.list_repo_labels(root, remote)
   return labels_mod.normalize(list or {}), err
+end
+
+---@param root string
+---@param remote? ForgeRemote
+---@return ForgeUser[], string|nil
+function M.list_assignable_users(root, remote)
+  remote = remote or remote_mod.detect(root)
+  local mod = backend(remote)
+  if not mod or not remote then return {}, "No forge provider for this repository" end
+  if type(mod.list_assignable_users) ~= "function" then return {}, nil end
+  return mod.list_assignable_users(root, remote)
 end
 
 ---@param root string

@@ -17,6 +17,8 @@ function M.capabilities()
       merge = true,
       draft = true,
       labels = true,
+      assignees = true,
+      multi_assignees = true,
     },
     issues = {
       list = true,
@@ -25,6 +27,8 @@ function M.capabilities()
       update = true,
       close = true,
       labels = true,
+      assignees = true,
+      multi_assignees = true,
     },
     comments = { list = true, create = true, update = true, delete = true },
     ci = { list = true, cancel = true, trigger = true, view = true, logs = true },
@@ -551,7 +555,7 @@ end
 ---@param _root string
 ---@param remote { host: string, owner: string, repo: string }
 ---@param number integer|string
----@param opts { title?: string, body?: string, base?: string, draft?: boolean, labels?: string[] }
+---@param opts { title?: string, body?: string, base?: string, draft?: boolean, labels?: string[], assignees?: string[] }
 ---@return boolean, string|nil
 function M.update_pr(_root, remote, number, opts)
   if not M.available(remote) then return false, "Forgejo/Codeberg token missing or curl unavailable" end
@@ -566,12 +570,15 @@ function M.update_pr(_root, remote, number, opts)
       api(remote, "PATCH", string.format("/repos/%s/%s/pulls/%s", remote.owner, remote.repo, tostring(number)), payload)
     if err then return false, err end
   end
-  if opts.labels then
+  if opts.labels or opts.assignees then
+    local issue_payload = {}
+    if opts.labels then issue_payload.labels = opts.labels end
+    if opts.assignees then issue_payload.assignees = opts.assignees end
     local _, err = api(
       remote,
       "PATCH",
       string.format("/repos/%s/%s/issues/%s", remote.owner, remote.repo, tostring(number)),
-      { labels = opts.labels }
+      issue_payload
     )
     if err then return false, err end
   end
@@ -627,6 +634,31 @@ function M.list_repo_labels(_root, remote)
   if err then return {}, err end
   if type(data) ~= "table" then return {}, nil end
   return map_labels(data), nil
+end
+
+---@param users any
+---@return ForgeUser[]
+local function map_assignable_users(users)
+  local out = {}
+  if type(users) ~= "table" then return out end
+  for _, u in ipairs(users) do
+    local login = u.login or u.username
+    if type(u) == "table" and login and login ~= "" then
+      table.insert(out, { login = login, name = u.full_name or u.name, id = u.id })
+    end
+  end
+  return out
+end
+
+---@param _root string
+---@param remote { host: string, owner: string, repo: string }
+---@return ForgeUser[], string|nil
+function M.list_assignable_users(_root, remote)
+  if not M.available(remote) then return {}, "Forgejo/Codeberg token missing or curl unavailable" end
+  local data, err = api(remote, "GET", string.format("/repos/%s/%s/assignees", remote.owner, remote.repo))
+  if err then return {}, err end
+  if type(data) ~= "table" then return {}, nil end
+  return map_assignable_users(data), nil
 end
 
 ---@param _root string
@@ -694,7 +726,7 @@ end
 ---@param _root string
 ---@param remote { host: string, owner: string, repo: string }
 ---@param number integer|string
----@param opts { title?: string, body?: string, labels?: string[], state?: string }
+---@param opts { title?: string, body?: string, labels?: string[], assignees?: string[], state?: string }
 ---@return boolean, string|nil
 function M.update_issue(_root, remote, number, opts)
   if not M.available(remote) then return false, "Forgejo/Codeberg token missing or curl unavailable" end
@@ -703,6 +735,7 @@ function M.update_issue(_root, remote, number, opts)
   if opts.title then payload.title = opts.title end
   if opts.body ~= nil then payload.body = opts.body end
   if opts.labels then payload.labels = opts.labels end
+  if opts.assignees then payload.assignees = opts.assignees end
   if opts.state then payload.state = opts.state end
   local _, err =
     api(remote, "PATCH", string.format("/repos/%s/%s/issues/%s", remote.owner, remote.repo, tostring(number)), payload)

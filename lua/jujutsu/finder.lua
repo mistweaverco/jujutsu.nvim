@@ -66,6 +66,10 @@ local function ensure_picker_focus(target_win, filetype)
 
     if target_win and vim.api.nvim_win_is_valid(target_win) then
       if vim.api.nvim_get_current_win() ~= target_win then pcall(vim.api.nvim_set_current_win, target_win) end
+      if filetype == "jujutsu-input" or filetype == "jujutsu-finder" then
+        local mode = vim.api.nvim_get_mode().mode
+        if not mode:match("^[iR]") then pcall(vim.cmd, "startinsert") end
+      end
       pcall(vim.cmd, "redraw")
       return true
     end
