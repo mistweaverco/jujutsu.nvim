@@ -44,7 +44,7 @@ local function open_session(root, pr, rem)
   })
 
   notify.info("Loading existing review comments…")
-  session_mod.refresh_remote_comments(session)
+  session_mod.ensure_remote_comments(session)
   if #(session.remote_comments or {}) > 0 then
     notify.info(string.format("Loaded %d remote comment(s)", #session.remote_comments))
   end

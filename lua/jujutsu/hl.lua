@@ -178,6 +178,7 @@ function M.setup()
     JujutsuCiPending = { fg = p.yellow, bold = p.bold },
     JujutsuCiWarning = { fg = p.orange, bold = p.bold },
     JujutsuCiId = { fg = p.green },
+    JujutsuCiCommand = { fg = p.cyan },
   }
 
   for name, opts in pairs(groups) do
@@ -188,7 +189,10 @@ end
 function M.attach_autocmd()
   vim.api.nvim_create_autocmd("ColorScheme", {
     group = vim.api.nvim_create_augroup("JujutsuHighlights", { clear = true }),
-    callback = function() M.setup() end,
+    callback = function()
+      M.setup()
+      pcall(require("jujutsu.ansi").clear_hl_cache)
+    end,
   })
 end
 

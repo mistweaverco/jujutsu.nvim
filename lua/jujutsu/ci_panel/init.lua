@@ -294,17 +294,19 @@ end
 
 ---@param state CiPanelState
 local function refresh(state)
-  if state.view == "logs" then
-    load_logs(state)
-  elseif state.view == "job" and state.selected_run and state.selected_job then
-    load_job(state, state.selected_run, state.selected_job)
-  elseif state.view == "run" and state.selected_run then
-    load_run(state, state.selected_run)
-  elseif state.view == "list" then
-    load_list(state, { reset = false })
-  else
-    load_list(state, { reset = true })
-  end
+  require("jujutsu.forge.cache").with_refresh(function()
+    if state.view == "logs" then
+      load_logs(state)
+    elseif state.view == "job" and state.selected_run and state.selected_job then
+      load_job(state, state.selected_run, state.selected_job)
+    elseif state.view == "run" and state.selected_run then
+      load_run(state, state.selected_run)
+    elseif state.view == "list" then
+      load_list(state, { reset = false })
+    else
+      load_list(state, { reset = true })
+    end
+  end)
 end
 
 ---@param state CiPanelState
@@ -425,10 +427,7 @@ local function open_panel(opts)
   }
   bind_keymaps(instance)
   load_list(instance, { reset = true })
-  Buffer.focus(buf)
-  vim.schedule(function()
-    if instance and instance.buf.bufnr == buf.bufnr then Buffer.focus(buf) end
-  end)
+  Buffer.ensure_focus(buf)
 
   vim.api.nvim_create_autocmd("WinClosed", {
     pattern = tostring(win),
@@ -456,7 +455,7 @@ function M.open(opts)
 
   local function go()
     if instance and Buffer.is_open(instance.buf) then
-      Buffer.focus(instance.buf)
+      Buffer.ensure_focus(instance.buf)
       refresh(instance)
       return
     end

@@ -1,3 +1,4 @@
+local cache = require("jujutsu.forge.cache")
 local credentials = require("jujutsu.forge.credentials")
 local http = require("jujutsu.forge.http")
 
@@ -49,19 +50,26 @@ function M.available(remote)
   return true
 end
 
----@param remote { owner: string, repo: string }
----@param method string
 ---@param path_or_url string
----@param body? table|false nil = no body; table = JSON body; false unused
----@return table|nil, string|nil
-local function api(remote, method, path_or_url, body)
-  local user, token, auth_err = resolve(remote)
-  if auth_err then return nil, auth_err end
+---@return string
+local function normalize_url(path_or_url)
   local url = path_or_url
   if not url:match("^https?://") then
     if url:sub(1, 1) ~= "/" then url = "/" .. url end
     url = API_BASE .. url
   end
+  return url
+end
+
+---@param remote { owner: string, repo: string }
+---@param method string
+---@param path_or_url string
+---@param body? table|false nil = no body; table = JSON body; false unused
+---@return table|nil, string|nil
+local function api_request(remote, method, path_or_url, body)
+  local user, token, auth_err = resolve(remote)
+  if auth_err then return nil, auth_err end
+  local url = normalize_url(path_or_url)
   if type(user) ~= "string" or user == "" or type(token) ~= "string" or token == "" then
     return nil, "Missing Bitbucket credentials"
   end
@@ -76,20 +84,33 @@ local function api(remote, method, path_or_url, body)
   return res.json or {}, nil
 end
 
+---@param remote { owner: string, repo: string }
+---@param method string
+---@param path_or_url string
+---@param body? table|false nil = no body; table = JSON body; false unused
+---@return table|nil, string|nil
+local function api(remote, method, path_or_url, body)
+  if not cache.is_http_read(method) then
+    local result, err = api_request(remote, method, path_or_url, body)
+    if result and not err then cache.clear() end
+    return result, err
+  end
+  local url = normalize_url(path_or_url)
+  local body_key = body ~= nil and http.encode_json(body) or ""
+  local cache_key = cache.key("bitbucket", remote.owner, remote.repo, method, url, body_key)
+  return cache.fetch(cache_key, function() return api_request(remote, method, path_or_url, body) end)
+end
+
 ---Bitbucket step logs are raw octet-stream, not JSON.
 ---@param remote { owner: string, repo: string }
 ---@param method string
 ---@param path_or_url string
 ---@param accept? string
 ---@return string|nil, string|nil
-local function api_text(remote, method, path_or_url, accept)
+local function api_text_request(remote, method, path_or_url, accept)
   local user, token, auth_err = resolve(remote)
   if auth_err then return nil, auth_err end
-  local url = path_or_url
-  if not url:match("^https?://") then
-    if url:sub(1, 1) ~= "/" then url = "/" .. url end
-    url = API_BASE .. url
-  end
+  local url = normalize_url(path_or_url)
   if type(user) ~= "string" or user == "" or type(token) ~= "string" or token == "" then
     return nil, "Missing Bitbucket credentials"
   end
@@ -100,6 +121,23 @@ local function api_text(remote, method, path_or_url, accept)
   local res = http.request(method, url, headers, nil, { follow_redirects = true })
   if res.err then return nil, res.err end
   return res.body or "", nil
+end
+
+---Bitbucket step logs are raw octet-stream, not JSON.
+---@param remote { owner: string, repo: string }
+---@param method string
+---@param path_or_url string
+---@param accept? string
+---@return string|nil, string|nil
+local function api_text(remote, method, path_or_url, accept)
+  if not cache.is_http_read(method) then
+    local result, err = api_text_request(remote, method, path_or_url, accept)
+    if result and not err then cache.clear() end
+    return result, err
+  end
+  local url = normalize_url(path_or_url)
+  local cache_key = cache.key("bitbucket-text", remote.owner, remote.repo, method, url, accept or "*/*")
+  return cache.fetch(cache_key, function() return api_text_request(remote, method, path_or_url, accept) end)
 end
 
 ---@param id string|integer

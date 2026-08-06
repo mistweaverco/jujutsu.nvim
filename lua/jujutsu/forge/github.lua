@@ -1,3 +1,4 @@
+local cache = require("jujutsu.forge.cache")
 local labels_mod = require("jujutsu.forge.labels")
 
 local M = {}
@@ -40,9 +41,22 @@ end
 ---@param root string
 ---@param args string[]
 ---@return { code: integer, stdout: string, stderr: string }
-local function run(root, args)
+local function run_uncached(root, args)
   local obj = vim.system(vim.list_extend({ "gh" }, args), { cwd = root, text = true }):wait()
   return { code = obj.code, stdout = obj.stdout or "", stderr = obj.stderr or "" }
+end
+
+---@param root string
+---@param args string[]
+---@return { code: integer, stdout: string, stderr: string }
+local function run(root, args)
+  if not cache.is_read_only("gh", args) then
+    local result = run_uncached(root, args)
+    if result.code == 0 then cache.clear() end
+    return result
+  end
+  local cache_key = cache.key_args("gh", root, args)
+  return cache.fetch(cache_key, function() return run_uncached(root, args) end)
 end
 
 ---@param root string
@@ -366,7 +380,7 @@ end
 ---@param method? string
 ---@param body? table
 ---@return table|nil, string|nil
-local function api_json(root, _, path, method, body)
+local function api_json_uncached(root, _, path, method, body)
   local args = { "api", "-H", "Accept: application/vnd.github+json" }
   if method and method ~= "GET" then
     table.insert(args, "-X")
@@ -397,6 +411,23 @@ local function api_json(root, _, path, method, body)
   local ook, arr = pcall(vim.json.decode, glued)
   if ook and type(arr) == "table" then return arr, nil end
   return nil, "invalid JSON from gh api"
+end
+
+---@param root string
+---@param remote { owner: string, repo: string }
+---@param path string
+---@param method? string
+---@param body? table
+---@return table|nil, string|nil
+local function api_json(root, remote, path, method, body)
+  local is_read = not method or method == "GET"
+  if not is_read or body then
+    local result, err = api_json_uncached(root, remote, path, method, body)
+    if result and not err then cache.clear() end
+    return result, err
+  end
+  local cache_key = cache.key("gh-api", root, path)
+  return cache.fetch(cache_key, function() return api_json_uncached(root, remote, path, method, body) end)
 end
 
 ---@param labels any
@@ -1221,28 +1252,31 @@ end
 function M.get_ci_job_logs(root, remote, run_id, job_id)
   if not M.available() then return {}, "gh is not on PATH" end
 
-  local tmpdir = fetch_job_log_zip(root, remote, job_id)
-  if tmpdir then
-    local zip_lines = logs_from_zip_dir(tmpdir)
-    pcall(vim.fn.delete, tmpdir, "rf")
-    if #zip_lines > 0 then return zip_lines, nil end
-  end
+  local cache_key = cache.key("gh-ci-logs", root, remote.owner, remote.repo, tostring(run_id), tostring(job_id))
+  return cache.fetch(cache_key, function()
+    local tmpdir = fetch_job_log_zip(root, remote, job_id)
+    if tmpdir then
+      local zip_lines = logs_from_zip_dir(tmpdir)
+      pcall(vim.fn.delete, tmpdir, "rf")
+      if #zip_lines > 0 then return zip_lines, nil end
+    end
 
-  local res = run(root, {
-    "run",
-    "view",
-    tostring(run_id),
-    "-R",
-    repo_flag(root, remote),
-    "--log",
-    "--job=" .. tostring(job_id),
-  })
-  if res.code ~= 0 then
-    local err = res.stderr ~= "" and res.stderr or res.stdout
-    return {}, err ~= "" and err or "gh run view --log failed"
-  end
-  if res.stdout == "" then return { "(empty log)" }, nil end
-  return normalize_gh_prefixed_logs(vim.split(res.stdout, "\n", { plain = true })), nil
+    local res = run(root, {
+      "run",
+      "view",
+      tostring(run_id),
+      "-R",
+      repo_flag(root, remote),
+      "--log",
+      "--job=" .. tostring(job_id),
+    })
+    if res.code ~= 0 then
+      local err = res.stderr ~= "" and res.stderr or res.stdout
+      return {}, err ~= "" and err or "gh run view --log failed"
+    end
+    if res.stdout == "" then return { "(empty log)" }, nil end
+    return normalize_gh_prefixed_logs(vim.split(res.stdout, "\n", { plain = true })), nil
+  end)
 end
 
 return M

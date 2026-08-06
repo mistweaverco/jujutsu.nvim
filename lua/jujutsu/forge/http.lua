@@ -1,5 +1,7 @@
 local M = {}
 
+local cache = require("jujutsu.forge.cache")
+
 ---@param value any
 ---@return string
 local function one_line(value) return (tostring(value or ""):gsub("[\r\n]+", " | ")) end
@@ -25,7 +27,7 @@ end
 ---@param data? string
 ---@param opts? { follow_redirects?: boolean }
 ---@return ForgeHttpResult
-function M.request(method, url, headers, data, opts)
+local function request_uncached(method, url, headers, data, opts)
   if vim.fn.executable("curl") ~= 1 then return { body = "", status = nil, err = "curl is not on PATH" } end
 
   opts = opts or {}
@@ -76,6 +78,31 @@ function M.request(method, url, headers, data, opts)
   end
 
   return { body = body, status = http_status, json = json }
+end
+
+---@param method string
+---@param url string
+---@param headers table<string, string>
+---@param data? string
+---@param opts? { follow_redirects?: boolean }
+---@return ForgeHttpResult
+function M.request(method, url, headers, data, opts)
+  if not cache.is_http_read(method) then
+    local result = request_uncached(method, url, headers, data, opts)
+    if not result.err then cache.clear() end
+    return result
+  end
+
+  local method_upper = (method or "GET"):upper()
+  local cache_key = cache.key(
+    "curl",
+    method_upper,
+    url,
+    cache.key_headers(headers),
+    data or "",
+    opts and opts.follow_redirects and "1" or "0"
+  )
+  return cache.fetch(cache_key, function() return request_uncached(method, url, headers, data, opts) end)
 end
 
 ---@param user string

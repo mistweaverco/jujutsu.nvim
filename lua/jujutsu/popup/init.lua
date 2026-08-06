@@ -169,6 +169,7 @@ function M:show()
   Buffer.open(buf, config.values.popup.kind or "split")
   self.buf = buf
   self:redraw()
+  Buffer.focus(buf)
 
   -- Bind keys via keymap that looks up current actions
   local function bind(key)

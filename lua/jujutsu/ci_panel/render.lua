@@ -1,3 +1,5 @@
+local ansi = require("jujutsu.ansi")
+local gh_log = require("jujutsu.ci_panel.gh_log")
 local model = require("jujutsu.ci_panel.model")
 
 local M = {}
@@ -208,6 +210,98 @@ function M.build_job(detail, caps)
   return lines, highlights, { item_ranges = item_ranges }
 end
 
+---@param lines string[]
+---@param highlights table[]
+---@param row integer
+---@param col integer
+---@param text string
+---@param hl string
+---@param line_hl? string
+local function push_at(lines, highlights, row, col, text, hl, line_hl)
+  if #lines <= row then
+    while #lines <= row do
+      table.insert(lines, "")
+    end
+  end
+  local line = lines[row + 1] or ""
+  lines[row + 1] = line .. text
+  if hl then
+    table.insert(highlights, { line = row, col = col, end_col = col + #text, hl = hl, line_hl = line_hl })
+  elseif line_hl then
+    table.insert(highlights, { line = row, line_hl = line_hl })
+  end
+end
+
+---@param lines string[]
+---@param highlights table[]
+---@param parsed GhLogLine
+local function append_gh_line(lines, highlights, parsed)
+  if parsed.skip then return end
+
+  local row = #lines
+  table.insert(lines, "")
+  local col = 0
+
+  if parsed.timestamp and parsed.timestamp ~= "" then
+    local ts = parsed.timestamp .. " "
+    push_at(lines, highlights, row, col, ts, "JujutsuSubtle")
+    col = col + #ts
+  end
+
+  local kind = parsed.kind or "plain"
+  local text = parsed.text or ""
+
+  if kind == "group" then
+    push_at(lines, highlights, row, col, text, "JujutsuSectionHeader")
+    return
+  end
+  if kind == "warning" then
+    push_at(lines, highlights, row, col, text, "JujutsuCiWarning")
+    return
+  end
+  if kind == "error" then
+    push_at(lines, highlights, row, col, text, "JujutsuCiFailure")
+    return
+  end
+  if kind == "notice" then
+    push_at(lines, highlights, row, col, text, "JujutsuCiPending")
+    return
+  end
+  if kind == "debug" then
+    push_at(lines, highlights, row, col, text, "JujutsuSubtle")
+    return
+  end
+  if kind == "command" then
+    push_at(lines, highlights, row, col, text, "JujutsuCiCommand")
+    return
+  end
+
+  local content_plain, hls = ansi.line_to_highlights(text, row, col)
+  lines[row + 1] = (lines[row + 1] or ""):sub(1, col) .. content_plain
+  vim.list_extend(highlights, hls)
+end
+
+---@param lines string[]
+---@param highlights table[]
+---@param line string
+local function append_log_line(lines, highlights, line)
+  local stripped = ansi.strip(line)
+  if stripped:match("^── .+ ──$") then
+    push(lines, highlights, stripped, "JujutsuSectionHeader")
+    return
+  end
+
+  if gh_log.looks_like_gh_actions(line) or gh_log.looks_like_gh_actions(stripped) then
+    append_gh_line(lines, highlights, gh_log.parse(line))
+    return
+  end
+
+  local row = #lines
+  local plain, line_hls = ansi.line_to_highlights(line, row)
+  table.insert(lines, plain)
+  vim.list_extend(highlights, line_hls)
+end
+
 ---@param job ForgeCiJob
 ---@param log_lines string[]
 ---@return string[], table[]
@@ -216,11 +310,7 @@ function M.build_logs(job, log_lines)
   push(lines, highlights, string.format("Log · ID %s", tostring(job.id)), "JujutsuPopupHeading")
   push(lines, highlights, "", nil)
   for _, line in ipairs(log_lines or {}) do
-    if line:match("^── .+ ──$") then
-      push(lines, highlights, line, "JujutsuSectionHeader")
-    else
-      table.insert(lines, line)
-    end
+    append_log_line(lines, highlights, line)
   end
   if #(log_lines or {}) == 0 then push(lines, highlights, "(empty log)", "JujutsuSubtle") end
   push(lines, highlights, "", nil)

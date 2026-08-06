@@ -77,7 +77,9 @@ local function close_panel()
 end
 
 ---@param state IssuePanelState
-local function fetch_and_render(state)
+---@param opts? { refresh?: boolean }
+local function fetch_and_render(state, opts)
+  opts = opts or {}
   paint(state, { loading = true })
   async.void(function()
     local function load()
@@ -108,7 +110,11 @@ local function fetch_and_render(state)
       state.kind = normalized.topic.kind
       paint(state, { topic = state.topic, comments = state.comments, error = cerr })
     end
-    load()
+    if opts.refresh then
+      require("jujutsu.forge.cache").with_refresh(load)
+    else
+      load()
+    end
   end)
 end
 
@@ -419,7 +425,7 @@ local function bind_keymaps(state)
     })
   end
   map(keys.close or "q", close_panel, "Close")
-  map(keys.refresh or "r", function() fetch_and_render(state) end, "Refresh")
+  map(keys.refresh or "r", function() fetch_and_render(state, { refresh = true }) end, "Refresh")
   map(keys.comment or "c", function() compose_comment(state) end, "Comment")
   map(keys.edit_comment or "e", function() edit_comment(state) end, "EditComment")
   map(keys.delete_comment or "x", function() delete_comment(state) end, "DeleteComment")
@@ -541,7 +547,7 @@ function M.toggle(opts)
 end
 
 function M.refresh()
-  if instance then fetch_and_render(instance) end
+  if instance then fetch_and_render(instance, { refresh = true }) end
 end
 
 ---@return boolean

@@ -1,3 +1,4 @@
+local cache = require("jujutsu.forge.cache")
 local credentials = require("jujutsu.forge.credentials")
 local http = require("jujutsu.forge.http")
 local labels_mod = require("jujutsu.forge.labels")
@@ -57,7 +58,7 @@ local function api_base(remote) return string.format("https://%s/api/v1", remote
 ---@param path string
 ---@param body? table
 ---@return table|nil, string|nil
-local function api(remote, method, path, body)
+local function api_request(remote, method, path, body)
   local t, auth_err = resolve_token(remote)
   if auth_err or not t then return nil, auth_err or "Forgejo/Codeberg token missing" end
   local url = api_base(remote) .. path
@@ -72,9 +73,25 @@ local function api(remote, method, path, body)
 end
 
 ---@param remote { host: string, owner: string, repo: string }
+---@param method string
+---@param path string
+---@param body? table
+---@return table|nil, string|nil
+local function api(remote, method, path, body)
+  if not cache.is_http_read(method) then
+    local result, err = api_request(remote, method, path, body)
+    if result and not err then cache.clear() end
+    return result, err
+  end
+  local body_key = body and http.encode_json(body) or ""
+  local cache_key = cache.key("forgejo", remote.host, remote.owner, remote.repo, method, path, body_key)
+  return cache.fetch(cache_key, function() return api_request(remote, method, path, body) end)
+end
+
+---@param remote { host: string, owner: string, repo: string }
 ---@param path string
 ---@return string|nil, string|nil
-local function api_text(remote, path)
+local function api_text_request(remote, path)
   local t, auth_err = resolve_token(remote)
   if auth_err or not t then return nil, auth_err or "Forgejo/Codeberg token missing" end
   local url = api_base(remote) .. path
@@ -85,6 +102,14 @@ local function api_text(remote, path)
   local res = http.request("GET", url, headers)
   if res.err then return nil, res.err end
   return res.body or "", nil
+end
+
+---@param remote { host: string, owner: string, repo: string }
+---@param path string
+---@return string|nil, string|nil
+local function api_text(remote, path)
+  local cache_key = cache.key("forgejo-text", remote.host, remote.owner, remote.repo, path)
+  return cache.fetch(cache_key, function() return api_text_request(remote, path) end)
 end
 
 ---@param r table

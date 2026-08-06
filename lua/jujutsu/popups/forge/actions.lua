@@ -356,7 +356,12 @@ function M.list_ci(popup)
     return
   end
   close_popup(popup)
-  with_auth(rem, function() require("jujutsu.ci_panel").open({ root = root, remote = rem }) end)
+  with_auth(rem, function()
+    vim.schedule(function()
+      pcall(vim.cmd, "redraw!")
+      require("jujutsu.ci_panel").open({ root = root, remote = rem })
+    end)
+  end)
 end
 
 function M.trigger_ci(popup)

@@ -27,6 +27,7 @@ end
 ---@field allow_free_text? boolean
 ---@field on_select fun(item: string|string[]|nil)
 ---@field on_open? fun(win: integer, bufnr: integer)
+---@field on_refresh? fun() optional callback after forge cache refresh
 
 ---@param opts FuzzyFinderOpts
 function M.open(opts)
@@ -129,6 +130,16 @@ function M.open(opts)
 
   map("<cr>", do_select)
   map("<c-c>", function() close(nil) end)
+  map("<c-r>", function()
+    local cache = require("jujutsu.forge.cache")
+    if type(opts.on_refresh) == "function" then
+      cache.with_refresh(function() opts.on_refresh() end)
+      redraw()
+    else
+      cache.clear()
+      require("jujutsu.notify").info("Forge cache cleared")
+    end
+  end)
   map("<esc>", function() close(nil) end)
   map("q", function() close(nil) end)
   map("<c-n>", function()

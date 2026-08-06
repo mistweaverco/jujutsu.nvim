@@ -133,8 +133,11 @@ function M.refresh_remote_comments(session)
     return true
   end
   local provider = require("jujutsu.forge.provider")
-  local comments = provider.list_review_comments(session.root, session.number, session.remote)
-  M.set_remote_comments(session, comments or {})
+  local cache = require("jujutsu.forge.cache")
+  cache.with_refresh(function()
+    local comments = provider.list_review_comments(session.root, session.number, session.remote)
+    M.set_remote_comments(session, comments or {})
+  end)
   return true
 end
 
@@ -158,7 +161,14 @@ end
 ---@return boolean
 function M.ensure_remote_comments(session)
   if session.remote_comments_loaded then return true end
-  return M.refresh_remote_comments(session)
+  if not session.remote or not session.number then
+    M.set_remote_comments(session, {})
+    return true
+  end
+  local provider = require("jujutsu.forge.provider")
+  local comments = provider.list_review_comments(session.root, session.number, session.remote)
+  M.set_remote_comments(session, comments or {})
+  return true
 end
 
 ---@param session ReviewSession

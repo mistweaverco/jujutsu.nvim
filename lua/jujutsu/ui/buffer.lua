@@ -95,6 +95,35 @@ function M.focus(buf)
   end
 end
 
+---Reclaim focus after popup/picker teardown (often steals WinEnter).
+---@param buf Buffer
+---@param opts? { delays?: integer[] }
+function M.ensure_focus(buf, opts)
+  opts = opts or {}
+  local delays = opts.delays or { 0, 30, 80, 160, 320 }
+  local function try()
+    if not buf or not vim.api.nvim_buf_is_valid(buf.bufnr) then return end
+    local cur = vim.api.nvim_get_current_win()
+    if vim.api.nvim_win_is_valid(cur) then
+      local cfg = vim.api.nvim_win_get_config(cur)
+      if cfg.relative and cfg.relative ~= "" then return end
+      local cur_buf = vim.api.nvim_win_get_buf(cur)
+      if vim.api.nvim_buf_is_valid(cur_buf) then
+        local ft = vim.bo[cur_buf].filetype
+        if ft == "jujutsu-finder" or ft == "jujutsu-input" then return end
+      end
+    end
+    M.focus(buf)
+  end
+  for _, delay in ipairs(delays) do
+    if delay == 0 then
+      vim.schedule(try)
+    else
+      vim.defer_fn(try, delay)
+    end
+  end
+end
+
 ---@param buf Buffer
 function M.close(buf)
   if buf.winid and vim.api.nvim_win_is_valid(buf.winid) then

@@ -1,3 +1,4 @@
+local cache = require("jujutsu.forge.cache")
 local labels_mod = require("jujutsu.forge.labels")
 
 local M = {}
@@ -35,7 +36,7 @@ end
 ---@param args string[]
 ---@param input? string
 ---@return { code: integer, stdout: string, stderr: string }
-local function run(root, args, input)
+local function run_uncached(root, args, input)
   local obj = vim
     .system(vim.list_extend({ "glab" }, args), {
       cwd = root,
@@ -44,6 +45,20 @@ local function run(root, args, input)
     })
     :wait()
   return { code = obj.code, stdout = obj.stdout or "", stderr = obj.stderr or "" }
+end
+
+---@param root string
+---@param args string[]
+---@param input? string
+---@return { code: integer, stdout: string, stderr: string }
+local function run(root, args, input)
+  if not cache.is_read_only("glab", args) then
+    local result = run_uncached(root, args, input)
+    if result.code == 0 then cache.clear() end
+    return result
+  end
+  local cache_key = cache.key_args("glab", root, args, input)
+  return cache.fetch(cache_key, function() return run_uncached(root, args, input) end)
 end
 
 ---@param root string

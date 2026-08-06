@@ -300,20 +300,23 @@ function M.default_base_branch(opts)
 
   if remote and remote.provider == "github" and vim.fn.executable("gh") == 1 then
     local repo = remote.owner .. "/" .. remote.repo
-    local obj = vim
-      .system({
-        "gh",
-        "repo",
-        "view",
-        repo,
-        "--json",
-        "defaultBranchRef",
-        "-q",
-        ".defaultBranchRef.name",
-      }, { cwd = cwd, text = true })
-      :wait()
-    if obj.code == 0 then
-      local name = vim.trim(obj.stdout or "")
+    local cache = require("jujutsu.forge.cache")
+    local args = {
+      "repo",
+      "view",
+      repo,
+      "--json",
+      "defaultBranchRef",
+      "-q",
+      ".defaultBranchRef.name",
+    }
+    local cache_key = cache.key_args("gh", cwd, args)
+    local res = cache.fetch(cache_key, function()
+      local obj = vim.system(vim.list_extend({ "gh" }, args), { cwd = cwd, text = true }):wait()
+      return { code = obj.code, stdout = obj.stdout or "", stderr = obj.stderr or "" }
+    end)
+    if res.code == 0 then
+      local name = vim.trim(res.stdout or "")
       if name ~= "" then return name end
     end
   end

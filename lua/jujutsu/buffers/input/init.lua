@@ -7,6 +7,7 @@ local M = {}
 ---@field placeholder? string hint shown when value is empty
 ---@field on_submit fun(value: string|nil) nil = aborted
 ---@field on_open? fun(win: integer, bufnr: integer)
+---@field on_refresh? fun() optional callback after forge cache refresh
 
 ---Single-line text input float, styled like the fuzzy finder.
 ---Typing works in normal mode (same character-map approach as the finder).
@@ -55,7 +56,10 @@ function M.open(opts)
   end
 
   local function redraw()
-    local hint = string.format("<cr> confirm  <esc>/<c-c> abort%s", allow_empty and "  (empty ok)" or "")
+    local hint = string.format(
+      "<cr> confirm  <esc>/<c-c> abort  <c-r> refresh forge cache%s",
+      allow_empty and "  (empty ok)" or ""
+    )
     local input_line = "> " .. value .. " "
     local lines = {
       input_line,
@@ -101,6 +105,15 @@ function M.open(opts)
   map("<c-w>", function()
     value = value:gsub("%s+%S*$", ""):gsub("%S+$", "")
     redraw()
+  end)
+  map("<c-r>", function()
+    local cache = require("jujutsu.forge.cache")
+    if type(opts.on_refresh) == "function" then
+      cache.with_refresh(function() opts.on_refresh() end)
+    else
+      cache.clear()
+      require("jujutsu.notify").info("Forge cache cleared")
+    end
   end)
 
   -- Same character set spirit as the fuzzy finder, plus a few input-friendly chars.
