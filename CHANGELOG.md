@@ -1,14 +1,67 @@
-## [Unreleased]
+## [1.11.0](https://github.com/mistweaverco/jujutsu.nvim/compare/v1.10.0...v1.11.0) (2026-08-06)
 
 ### Features
 
-* **forge:** Magit-style Forge popup (`g`) for PR/issue CRUD, search filters, CI list/cancel/trigger, and review
-* **forge:** colored labels in the conversation panel when the forge provides colors
-* **issue-panel:** edit/delete comments, edit topic, labels, close/merge
+* **bitbucket,ui:** enable assignees and rework input in ui ([47e9eb3](https://github.com/mistweaverco/jujutsu.nvim/commit/47e9eb33b6d9042de5facee894d914f5105c57de))
+* **docs:** add screenshots link to README.md ([b4ca654](https://github.com/mistweaverco/jujutsu.nvim/commit/b4ca654e2ce3c9da4870a5796b85d3238508029b))
 
-### Breaking
+### Bug Fixes
 
-* Review entry moved from Diff popup `dR` to Forge popup `g` then `r`
+* **github:** pr search all returns none ([b9065de](https://github.com/mistweaverco/jujutsu.nvim/commit/b9065de0dd41274070d16f08748a22ec83d38575))
+
+## [1.10.0](https://github.com/mistweaverco/jujutsu.nvim/compare/v1.9.1...v1.10.0) (2026-08-06)
+
+### Features
+
+* **ci,cache:** add cache for forge data and improve ci render ([e41328f](https://github.com/mistweaverco/jujutsu.nvim/commit/e41328fd8c743b07abd3746119ff62a243d560a2))
+
+## [1.9.1](https://github.com/mistweaverco/jujutsu.nvim/compare/v1.9.0...v1.9.1) (2026-08-05)
+
+### Bug Fixes
+
+* **ui,bookmarks:** fix cursor and bookmarks management ([862025c](https://github.com/mistweaverco/jujutsu.nvim/commit/862025ccc030f7df95f6b75cf61ac0caadd2b182))
+
+## [1.9.0](https://github.com/mistweaverco/jujutsu.nvim/compare/v1.8.1...v1.9.0) (2026-08-05)
+
+### Features
+
+* **ux:** picker for pr/mr and fix cursor display in inputs ([c5e5a0e](https://github.com/mistweaverco/jujutsu.nvim/commit/c5e5a0e7a4cf2ae90ba8748121fea08c39673d84))
+
+## [1.8.1](https://github.com/mistweaverco/jujutsu.nvim/compare/v1.8.0...v1.8.1) (2026-08-05)
+
+### Bug Fixes
+
+* **ci_panel:** fix github provider elapsed time display ([0b506a0](https://github.com/mistweaverco/jujutsu.nvim/commit/0b506a094a027e546a1fd1bdc952a943d94331c1))
+
+## [1.8.0](https://github.com/mistweaverco/jujutsu.nvim/compare/v1.7.2...v1.8.0) (2026-08-05)
+
+### Features
+
+* **ci_panel:** add inline ci view ([44fea70](https://github.com/mistweaverco/jujutsu.nvim/commit/44fea70414b6d46f8b6b01027daf8fe2836debe0))
+* **forge-hub:** make jujutsu.nvim the greatest forge hub plugin ([75e63f8](https://github.com/mistweaverco/jujutsu.nvim/commit/75e63f8b959443b929568b0b2291bffde4135173))
+
+### Bug Fixes
+
+* **issue_panel:** strip `^M` character leaking into view ([06626c2](https://github.com/mistweaverco/jujutsu.nvim/commit/06626c29112fa37edc14f7388b9ffbe218d9ae54))
+
+## [1.7.2](https://github.com/mistweaverco/jujutsu.nvim/compare/v1.7.1...v1.7.2) (2026-08-04)
+
+### Bug Fixes
+
+* **review:** errors on nil value + better comment highlights ([59049c9](https://github.com/mistweaverco/jujutsu.nvim/commit/59049c9b24e718fedd6f17980cefb35c7b34fd06))
+
+## [1.7.1](https://github.com/mistweaverco/jujutsu.nvim/compare/v1.7.0...v1.7.1) (2026-08-03)
+
+### Bug Fixes
+
+* **blame:** fix jj file annotate ([3f65529](https://github.com/mistweaverco/jujutsu.nvim/commit/3f65529e97680fe681a134263e236d1e56d8b3e8))
+
+## [1.7.0](https://github.com/mistweaverco/jujutsu.nvim/compare/v1.6.0...v1.7.0) (2026-08-03)
+
+### Features
+
+* **pr:** add conversation view to issue panel ([187e01d](https://github.com/mistweaverco/jujutsu.nvim/commit/187e01df934531539abb8011d8bc4ab1523951d9))
+* **pr:** fix auth flow and make ui align with diffview ([42cec20](https://github.com/mistweaverco/jujutsu.nvim/commit/42cec208c8d9c3198f021ae7d413f0ede4dbb87d))
 
 ## [1.6.0](https://github.com/mistweaverco/jujutsu.nvim/compare/v1.5.0...v1.6.0) (2026-07-31)
 
