@@ -12,7 +12,7 @@ interface for Neovim.
 Inspired by [`Neogit`](https://github.com/neogitorg/neogit)
 rewritten without required plugin dependencies.
 
-![jujutsu.nvim promo image](assets/jujutsu.nvim-opengraph-image.png)
+[Screenshots 📸](https://github.com/mistweaverco/jujutsu.nvim/wiki/Screenshots)
 
 </div>
 
