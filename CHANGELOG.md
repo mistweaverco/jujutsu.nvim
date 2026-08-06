@@ -1,9 +1,19 @@
+## [1.11.1](https://github.com/mistweaverco/jujutsu.nvim/compare/v1.11.0...v1.11.1) (2026-08-06)
+
+### Features
+
+* **docs:** add screenshots link to README.md ([b4ca654](https://github.com/mistweaverco/jujutsu.nvim/commit/b4ca654e2ce3c9da4870a5796b85d3238508029b))
+* **docs:** update CHANGELOG.md ([6ce985b](https://github.com/mistweaverco/jujutsu.nvim/commit/6ce985bbbeabd14f0fbb885ee061218b1b0a3cbc))
+
+### Bug Fixes
+
+* **forge:** manual trigger of ci in gh and forgejo ([cf144ca](https://github.com/mistweaverco/jujutsu.nvim/commit/cf144ca7e7dc6cff37fc918cbdf01e26788e8eee))
+
 ## [1.11.0](https://github.com/mistweaverco/jujutsu.nvim/compare/v1.10.0...v1.11.0) (2026-08-06)
 
 ### Features
 
 * **bitbucket,ui:** enable assignees and rework input in ui ([47e9eb3](https://github.com/mistweaverco/jujutsu.nvim/commit/47e9eb33b6d9042de5facee894d914f5105c57de))
-* **docs:** add screenshots link to README.md ([b4ca654](https://github.com/mistweaverco/jujutsu.nvim/commit/b4ca654e2ce3c9da4870a5796b85d3238508029b))
 
 ### Bug Fixes
 
