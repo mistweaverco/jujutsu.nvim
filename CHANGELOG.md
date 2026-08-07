@@ -1,3 +1,9 @@
+## [1.11.2](https://github.com/mistweaverco/jujutsu.nvim/compare/v1.11.1...v1.11.2) (2026-08-07)
+
+### Bug Fixes
+
+* **forge/github:** fix gh ci log rendering ([0fd839f](https://github.com/mistweaverco/jujutsu.nvim/commit/0fd839ff5af2d4a4ccf2d37007709848b5b5e15f))
+
 ## [1.11.1](https://github.com/mistweaverco/jujutsu.nvim/compare/v1.11.0...v1.11.1) (2026-08-06)
 
 ### Features
