@@ -235,12 +235,14 @@ end
 ---@param lines string[]
 ---@param highlights table[]
 ---@param parsed GhLogLine
-local function append_gh_line(lines, highlights, parsed)
+---@param indent? string
+local function append_gh_line(lines, highlights, parsed, indent)
   if parsed.skip then return end
+  indent = indent or ""
 
   local row = #lines
-  table.insert(lines, "")
-  local col = 0
+  table.insert(lines, indent)
+  local col = #indent
 
   if parsed.timestamp and parsed.timestamp ~= "" then
     local ts = parsed.timestamp .. " "
@@ -251,7 +253,7 @@ local function append_gh_line(lines, highlights, parsed)
   local kind = parsed.kind or "plain"
   local text = parsed.text or ""
 
-  if kind == "group" then
+  if kind == "group" or kind == "section" then
     push_at(lines, highlights, row, col, text, "JujutsuSectionHeader")
     return
   end
@@ -284,38 +286,111 @@ end
 ---@param lines string[]
 ---@param highlights table[]
 ---@param line string
-local function append_log_line(lines, highlights, line)
-  local stripped = ansi.strip(line)
-  if stripped:match("^── .+ ──$") then
-    push(lines, highlights, stripped, "JujutsuSectionHeader")
+---@param parsed? GhLogLine
+---@param indent? string
+local function append_log_line(lines, highlights, line, parsed, indent)
+  indent = indent or ""
+  if parsed then
+    append_gh_line(lines, highlights, parsed, indent)
     return
   end
 
+  local stripped = ansi.strip(line)
+  if stripped:match("^── .+ ──$") then return end
+
   if gh_log.looks_like_gh_actions(line) or gh_log.looks_like_gh_actions(stripped) then
-    append_gh_line(lines, highlights, gh_log.parse(line))
+    append_gh_line(lines, highlights, gh_log.parse(line), indent)
     return
   end
 
   local row = #lines
-  local plain, line_hls = ansi.line_to_highlights(line, row)
-  table.insert(lines, plain)
+  local plain, line_hls = ansi.line_to_highlights(line, row, #indent)
+  table.insert(lines, indent .. plain)
   vim.list_extend(highlights, line_hls)
+end
+
+---@param lines string[]
+---@param highlights table[]
+---@param item_ranges table[]
+---@param nodes CiLogNode[]
+---@param folds table<string, boolean>
+---@param depth? integer
+local function render_log_nodes(lines, highlights, item_ranges, nodes, folds, depth)
+  depth = depth or 0
+  local config = require("jujutsu.config")
+  local signs = config.values.signs.section or { ">", "v" }
+  local indent = string.rep("  ", depth)
+
+  for _, node in ipairs(nodes or {}) do
+    if node.kind == "group" then
+      local folded = folds[node.id] ~= false
+      if node.skipped then folded = true end
+      local sign = signs[folded and 1 or 2]
+      local title = node.title or "(untitled)"
+      local count_text = node.skipped and "(skipped)" or string.format("(%d)", node.count or 0)
+      local body = string.format("%s %s %s", sign, title, count_text)
+      local text = indent .. body
+      local start_line = #lines
+      table.insert(lines, text)
+      local row = #lines - 1
+      local base = #indent
+      table.insert(highlights, { line = row, col = base, end_col = base + #sign, hl = "JujutsuFold" })
+      table.insert(highlights, {
+        line = row,
+        col = base + #sign + 1,
+        end_col = base + #sign + 1 + #title,
+        hl = "JujutsuSectionHeader",
+      })
+      table.insert(highlights, {
+        line = row,
+        col = base + #sign + 1 + #title + 1,
+        end_col = #text,
+        hl = node.skipped and "JujutsuSubtle" or "JujutsuSectionCount",
+      })
+      table.insert(item_ranges, {
+        start_line = start_line,
+        end_line = row,
+        kind = "log_group",
+        group_id = node.id,
+        folded = folded,
+        skipped = node.skipped,
+      })
+      if not folded and not node.skipped then
+        render_log_nodes(lines, highlights, item_ranges, node.children, folds, depth + 1)
+      end
+    else
+      append_log_line(lines, highlights, node.raw or "", node.parsed, indent)
+    end
+  end
 end
 
 ---@param job ForgeCiJob
 ---@param log_lines string[]
----@return string[], table[]
-function M.build_logs(job, log_lines)
+---@param opts? { folds?: table<string, boolean>, tree?: CiLogNode[] }
+---@return string[], table[], { item_ranges: table[], tree: CiLogNode[], folds: table<string, boolean> }
+function M.build_logs(job, log_lines, opts)
+  opts = opts or {}
   local lines, highlights = {}, {}
+  local item_ranges = {}
+  local tree = opts.tree or gh_log.build_tree(log_lines or {}, {
+    steps = job and job.steps or nil,
+  })
+  local folds = opts.folds
+  if not folds then
+    local ci = require("jujutsu.config").values.ci_panel or {}
+    folds = gh_log.default_folds(tree, ci.logs_folded ~= false)
+  end
+
   push(lines, highlights, string.format("Log · ID %s", tostring(job.id)), "JujutsuPopupHeading")
   push(lines, highlights, "", nil)
-  for _, line in ipairs(log_lines or {}) do
-    append_log_line(lines, highlights, line)
+  if #(log_lines or {}) == 0 then
+    push(lines, highlights, "(empty log)", "JujutsuSubtle")
+  else
+    render_log_nodes(lines, highlights, item_ranges, tree, folds)
   end
-  if #(log_lines or {}) == 0 then push(lines, highlights, "(empty log)", "JujutsuSubtle") end
   push(lines, highlights, "", nil)
-  push(lines, highlights, "<bs> back   q close", "JujutsuHint")
-  return lines, highlights
+  push(lines, highlights, "<tab>/za fold   zA fold recursive   <bs> back   q close", "JujutsuHint")
+  return lines, highlights, { item_ranges = item_ranges, tree = tree, folds = folds }
 end
 
 ---@param message string

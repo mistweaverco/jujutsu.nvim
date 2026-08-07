@@ -1,6 +1,7 @@
 local Buffer = require("jujutsu.ui.buffer")
 local async = require("jujutsu.async")
 local config = require("jujutsu.config")
+local gh_log = require("jujutsu.ci_panel.gh_log")
 local notify = require("jujutsu.notify")
 local provider = require("jujutsu.forge.provider")
 local remote_mod = require("jujutsu.forge.remote")
@@ -20,6 +21,8 @@ local M = {}
 ---@field selected_run? ForgeCiRun
 ---@field selected_job? ForgeCiJob
 ---@field log_lines? string[]
+---@field log_tree? CiLogNode[]
+---@field log_folds? table<string, boolean>
 ---@field item_ranges table[]
 ---@field list_limit integer
 ---@field list_has_more boolean
@@ -227,6 +230,71 @@ local function load_job(state, run, job)
 end
 
 ---@param state CiPanelState
+local function paint_logs(state)
+  local job = state.selected_job
+  if not job then return end
+  local rendered, hls, meta = render.build_logs(job, state.log_lines or {}, {
+    tree = state.log_tree,
+    folds = state.log_folds,
+  })
+  if meta then
+    state.log_tree = meta.tree
+    state.log_folds = meta.folds
+  end
+  paint(state, rendered, hls, meta)
+end
+
+---@param state CiPanelState
+---@param set_folded? boolean|nil nil = toggle
+local function fold_log_group(state, set_folded)
+  if state.view ~= "logs" then return end
+  local item = item_under_cursor(state)
+  if not item or item.kind ~= "log_group" or not item.group_id then return end
+  state.log_folds = state.log_folds or {}
+  if set_folded == nil then
+    local folded = state.log_folds[item.group_id] ~= false
+    state.log_folds[item.group_id] = not folded
+  else
+    state.log_folds[item.group_id] = set_folded
+  end
+  local cursor = state.win and vim.api.nvim_win_is_valid(state.win) and vim.api.nvim_win_get_cursor(state.win) or nil
+  paint_logs(state)
+  if cursor and state.win and vim.api.nvim_win_is_valid(state.win) then
+    local line_count = vim.api.nvim_buf_line_count(state.buf.bufnr)
+    local row = math.min(cursor[1], line_count)
+    pcall(vim.api.nvim_win_set_cursor, state.win, { row, cursor[2] })
+  end
+end
+
+---Toggle/open/close the group under the cursor and all nested groups (like Vim zA/zO/zC).
+---@param state CiPanelState
+---@param set_folded? boolean|nil nil = toggle recursively
+local function fold_log_group_recursive(state, set_folded)
+  if state.view ~= "logs" then return end
+  local item = item_under_cursor(state)
+  if not item or item.kind ~= "log_group" or not item.group_id then return end
+  local node = gh_log.find_group(state.log_tree or {}, item.group_id)
+  if not node then return end
+
+  state.log_folds = state.log_folds or {}
+  if set_folded == nil then
+    local folded = state.log_folds[item.group_id] ~= false
+    set_folded = not folded
+  end
+  for _, id in ipairs(gh_log.group_ids_recursive(node)) do
+    state.log_folds[id] = set_folded
+  end
+
+  local cursor = state.win and vim.api.nvim_win_is_valid(state.win) and vim.api.nvim_win_get_cursor(state.win) or nil
+  paint_logs(state)
+  if cursor and state.win and vim.api.nvim_win_is_valid(state.win) then
+    local line_count = vim.api.nvim_buf_line_count(state.buf.bufnr)
+    local row = math.min(cursor[1], line_count)
+    pcall(vim.api.nvim_win_set_cursor, state.win, { row, cursor[2] })
+  end
+end
+
+---@param state CiPanelState
 local function load_logs(state)
   local caps = provider.capabilities(state.remote)
   if not caps.ci.logs then
@@ -249,8 +317,22 @@ local function load_logs(state)
   state.selected_run = run
   state.selected_job = job
   state.view = "logs"
+  state.log_tree = nil
+  state.log_folds = nil
   paint(state, render.build_loading("Loading logs…"))
   async.void(function()
+    -- Ensure steps include timestamps so flat logs can be split into parent sections.
+    local need_steps = not job.steps or #job.steps == 0 or not job.steps[1].started_at
+    if need_steps then
+      local detail = provider.get_ci_job(state.root, run.id, job.id, state.remote)
+      if instance ~= state then return end
+      if detail and detail.job then
+        job = detail.job
+        state.selected_job = job
+        state.job_detail = detail
+      end
+    end
+
     local lines, err = provider.get_ci_job_logs(state.root, run.id, job.id, state.remote)
     if instance ~= state then return end
     if err then
@@ -260,8 +342,9 @@ local function load_logs(state)
       return
     end
     state.log_lines = lines
-    local rendered, hls = render.build_logs(job, lines)
-    paint(state, rendered, hls)
+    state.log_tree = nil
+    state.log_folds = nil
+    paint_logs(state)
   end)
 end
 
@@ -327,6 +410,10 @@ local function open_selection(state)
     if job and run then load_job(state, run, job) end
     return
   end
+  if state.view == "logs" then
+    fold_log_group(state)
+    return
+  end
 end
 
 ---@param state CiPanelState
@@ -384,6 +471,13 @@ local function bind_keymaps(state)
   map(keys.logs or "l", function() load_logs(state) end, "Logs")
   map(keys.cancel or "x", function() cancel_run(state) end, "Cancel")
   map(keys.load_more or "+", function() load_more_list(state) end, "LoadMore")
+  map(keys.toggle or "<tab>", function() fold_log_group(state) end, "ToggleFold")
+  map(keys.toggle_fold or "za", function() fold_log_group(state) end, "ToggleFold")
+  map(keys.open_fold or "zo", function() fold_log_group(state, false) end, "OpenFold")
+  map(keys.close_fold or "zc", function() fold_log_group(state, true) end, "CloseFold")
+  map(keys.toggle_fold_recursive or "zA", function() fold_log_group_recursive(state) end, "ToggleFoldRecursive")
+  map(keys.open_fold_recursive or "zO", function() fold_log_group_recursive(state, false) end, "OpenFoldRecursive")
+  map(keys.close_fold_recursive or "zC", function() fold_log_group_recursive(state, true) end, "CloseFoldRecursive")
 end
 
 ---@param opts { root: string, remote: ForgeRemote }

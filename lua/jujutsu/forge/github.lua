@@ -1013,6 +1013,8 @@ local function map_job(j)
       status = s.status or "",
       conclusion = s.conclusion,
       number = s.number,
+      started_at = s.startedAt or s.started_at,
+      completed_at = s.completedAt or s.completed_at,
     })
   end
   return {
@@ -1198,8 +1200,9 @@ end
 ---@param remote { owner: string, repo: string }
 ---@param job_id string|integer
 ---@return string|nil tmpdir
+---@return string[]|nil plain_lines  when the API returns a plain text log instead of a zip
 local function fetch_job_log_zip(root, remote, job_id)
-  if vim.fn.executable("unzip") ~= 1 or vim.fn.executable("curl") ~= 1 then return nil end
+  if vim.fn.executable("curl") ~= 1 then return nil end
   local token_res = run(root, { "auth", "token" })
   if token_res.code ~= 0 then return nil end
   local token = vim.trim(token_res.stdout or "")
@@ -1232,59 +1235,133 @@ local function fetch_job_log_zip(root, remote, job_id)
     pcall(vim.fn.delete, tmpdir, "rf")
     return nil
   end
-  local unzip = vim.system({ "unzip", "-q", "-o", tmpzip, "-d", tmpdir }, { text = true }):wait()
-  pcall(vim.fn.delete, tmpzip, "rf")
-  if unzip.code ~= 0 then
+
+  -- Recent GitHub job log downloads are often a single plain-text file, not a zip.
+  local is_zip = false
+  if vim.fn.executable("file") == 1 then
+    local file_kind = vim.fn.system({ "file", "-b", tmpzip })
+    is_zip = type(file_kind) == "string" and file_kind:lower():find("zip", 1, true) ~= nil
+  else
+    -- Peek magic bytes
+    local fh = io.open(tmpzip, "rb")
+    if fh then
+      local magic = fh:read(2)
+      fh:close()
+      is_zip = magic == "PK"
+    end
+  end
+  if not is_zip then
+    local lines = vim.fn.readfile(tmpzip)
+    pcall(vim.fn.delete, tmpzip, "rf")
+    pcall(vim.fn.delete, tmpdir, "rf")
+    if type(lines) == "table" and #lines > 0 then return nil, lines end
+    return nil
+  end
+
+  if vim.fn.executable("unzip") ~= 1 then
+    pcall(vim.fn.delete, tmpzip, "rf")
     pcall(vim.fn.delete, tmpdir, "rf")
     return nil
   end
+  local unzip = vim.system({ "unzip", "-q", "-o", tmpzip, "-d", tmpdir }, { text = true }):wait()
+  if unzip.code ~= 0 then
+    local lines = vim.fn.readfile(tmpzip)
+    pcall(vim.fn.delete, tmpzip, "rf")
+    pcall(vim.fn.delete, tmpdir, "rf")
+    if type(lines) == "table" and #lines > 0 then return nil, lines end
+    return nil
+  end
+  pcall(vim.fn.delete, tmpzip, "rf")
   return tmpdir
 end
 
 ---@param tmpdir string
----@return string[]
+---@return string[], { name: string, lines: string[] }[]
 local function logs_from_zip_dir(tmpdir)
   local files = vim.fn.glob(tmpdir .. "/**/*.txt", true, true)
   if type(files) == "string" then files = { files } end
-  if #files == 0 then return {} end
+  if #files == 0 then
+    local all = vim.fn.glob(tmpdir .. "/**/*", true, true)
+    if type(all) == "string" then all = { all } end
+    files = {}
+    for _, f in ipairs(all) do
+      if vim.fn.isdirectory(f) == 0 then table.insert(files, f) end
+    end
+  end
+  if #files == 0 then return {}, {} end
   table.sort(files, function(a, b)
     local na = tonumber(a:match("(%d+)_") or "0") or 0
     local nb = tonumber(b:match("(%d+)_") or "0") or 0
-    return na < nb
+    if na ~= nb then return na < nb end
+    return a < b
   end)
   local lines = {}
+  local chunks = {}
   for _, file in ipairs(files) do
     local step = step_name_from_log_file(file)
+    local content = vim.fn.readfile(file)
+    if type(content) ~= "table" then content = {} end
+    table.insert(chunks, { name = step, lines = content })
     if #lines > 0 then table.insert(lines, "") end
     table.insert(lines, "── " .. step .. " ──")
-    local content = vim.fn.readfile(file)
-    if type(content) == "table" then vim.list_extend(lines, content) end
+    vim.list_extend(lines, content)
   end
-  return lines
+  return lines, chunks
 end
 
 ---gh prefixes each line as job\\tstep\\tcontent; strip job prefix and group by step.
 ---@param lines string[]
----@return string[]
+---@return string[], { name: string, lines: string[] }[]
 local function normalize_gh_prefixed_logs(lines)
   local out = {}
+  local chunks = {}
+  ---@type { name: string, lines: string[] }|nil
+  local current = nil
   local current_step = nil
+  local had_prefix = false
+
+  local function start_step(step)
+    local name = step
+    local unknown = not name or name == "" or name == "UNKNOWN STEP"
+    if unknown then name = "Unknown step" end
+    if current and current_step == step then return end
+    current_step = step
+    current = { name = name, lines = {} }
+    table.insert(chunks, current)
+    -- Only emit visible banners for real step names; UNKNOWN STEP banners
+    -- would otherwise nest as fake groups once we re-split by timestamps.
+    if not unknown then
+      if #out > 0 then table.insert(out, "") end
+      table.insert(out, "── " .. name .. " ──")
+    end
+  end
+
   for _, line in ipairs(lines) do
     local step, content = line:match("^[^\t]+\t([^\t]*)\t(.*)$")
     if step then
-      if step ~= current_step then
-        current_step = step
-        if step ~= "" and step ~= "UNKNOWN STEP" then
-          if #out > 0 then table.insert(out, "") end
-          table.insert(out, "── " .. step .. " ──")
-        end
-      end
+      had_prefix = true
+      start_step(step)
+      table.insert(current.lines, content)
       table.insert(out, content)
     else
+      if not current then start_step("UNKNOWN STEP") end
+      table.insert(current.lines, line)
       table.insert(out, line)
     end
   end
-  return out
+
+  if not had_prefix then return lines, {} end
+  return out, chunks
+end
+
+---@param lines string[]
+---@return integer
+local function count_step_banners(lines)
+  local n = 0
+  for _, line in ipairs(lines or {}) do
+    if line:match("^── .+ ──$") then n = n + 1 end
+  end
+  return n
 end
 
 ---@param root string
@@ -1295,13 +1372,24 @@ end
 function M.get_ci_job_logs(root, remote, run_id, job_id)
   if not M.available() then return {}, "gh is not on PATH" end
 
-  local cache_key = cache.key("gh-ci-logs", root, remote.owner, remote.repo, tostring(run_id), tostring(job_id))
+  local cache_key = cache.key("gh-ci-logs-v3", root, remote.owner, remote.repo, tostring(run_id), tostring(job_id))
   return cache.fetch(cache_key, function()
-    local tmpdir = fetch_job_log_zip(root, remote, job_id)
+    local candidates = {}
+
+    local tmpdir, plain_lines = fetch_job_log_zip(root, remote, job_id)
     if tmpdir then
-      local zip_lines = logs_from_zip_dir(tmpdir)
+      local zip_lines, zip_chunks = logs_from_zip_dir(tmpdir)
       pcall(vim.fn.delete, tmpdir, "rf")
-      if #zip_lines > 0 then return zip_lines, nil end
+      if #zip_lines > 0 then
+        table.insert(candidates, {
+          lines = zip_lines,
+          steps = math.max(#(zip_chunks or {}), count_step_banners(zip_lines)),
+        })
+      end
+    elseif plain_lines and #plain_lines > 0 then
+      -- Plain-text job log (no per-step zip entries). Step parents come from
+      -- job.steps timestamps during tree build.
+      table.insert(candidates, { lines = plain_lines, steps = 0 })
     end
 
     local res = run(root, {
@@ -1313,12 +1401,28 @@ function M.get_ci_job_logs(root, remote, run_id, job_id)
       "--log",
       "--job=" .. tostring(job_id),
     })
-    if res.code ~= 0 then
-      local err = res.stderr ~= "" and res.stderr or res.stdout
+    if res.code == 0 and res.stdout ~= "" then
+      local gh_lines, gh_chunks = normalize_gh_prefixed_logs(vim.split(res.stdout, "\n", { plain = true }))
+      local named = 0
+      for _, c in ipairs(gh_chunks or {}) do
+        if c.name ~= "Unknown step" and c.name ~= "Log" then named = named + 1 end
+      end
+      table.insert(candidates, {
+        lines = gh_lines,
+        steps = named,
+      })
+    elseif #candidates == 0 then
+      local err = (res.stderr ~= "" and res.stderr) or res.stdout
       return {}, err ~= "" and err or "gh run view --log failed"
     end
-    if res.stdout == "" then return { "(empty log)" }, nil end
-    return normalize_gh_prefixed_logs(vim.split(res.stdout, "\n", { plain = true })), nil
+
+    table.sort(candidates, function(a, b)
+      if a.steps ~= b.steps then return a.steps > b.steps end
+      return #a.lines > #b.lines
+    end)
+    local best = candidates[1]
+    if not best or #best.lines == 0 then return { "(empty log)" }, nil end
+    return best.lines, nil
   end)
 end
 

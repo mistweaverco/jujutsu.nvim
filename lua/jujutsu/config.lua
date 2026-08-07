@@ -150,6 +150,7 @@ local defaults = {
     min_width = 72,
     max_width = 160,
     page_size = 20,
+    logs_folded = true,
     keymaps = {
       close = "q",
       back = "<bs>",
@@ -159,6 +160,13 @@ local defaults = {
       logs = "l",
       cancel = "x",
       load_more = "+",
+      toggle = "<tab>",
+      toggle_fold = "za",
+      open_fold = "zo",
+      close_fold = "zc",
+      toggle_fold_recursive = "zA",
+      open_fold_recursive = "zO",
+      close_fold_recursive = "zC",
     },
   },
   sections = {

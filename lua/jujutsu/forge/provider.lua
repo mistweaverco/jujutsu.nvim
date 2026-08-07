@@ -50,6 +50,8 @@ local M = {}
 ---@field status string
 ---@field conclusion? string
 ---@field number? integer
+---@field started_at? string
+---@field completed_at? string
 
 ---@class ForgeCiJob
 ---@field id string
