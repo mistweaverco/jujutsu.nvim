@@ -1,4 +1,5 @@
 local ansi = require("jujutsu.ansi")
+local ci_model = require("jujutsu.ci_panel.model")
 
 local M = {}
 
@@ -107,28 +108,7 @@ end
 ---Parse a GitHub Actions / RFC3339 timestamp to epoch seconds (fractional).
 ---@param ts string|nil
 ---@return number|nil
-local function parse_time(ts)
-  if not ts or ts == "" then return nil end
-  -- 2026-08-07T12:32:49.5734094Z or 2026-08-07T12:32:49Z
-  local y, mo, d, h, mi, s, frac = ts:match("^(%d%d%d%d)%-(%d%d)%-(%d%d)T(%d%d):(%d%d):(%d%d)%.?(%d*)")
-  if not y then return nil end
-  frac = frac or ""
-  if #frac > 6 then frac = frac:sub(1, 6) end
-  local sub = tonumber("0." .. (frac ~= "" and frac or "0")) or 0
-  local epoch = os.time({
-    year = tonumber(y),
-    month = tonumber(mo),
-    day = tonumber(d),
-    hour = tonumber(h),
-    min = tonumber(mi),
-    sec = tonumber(s),
-    isdst = false,
-  })
-  if not epoch then return nil end
-  -- os.time is local; GHA stamps are UTC. Convert via difference if possible.
-  -- For ordering within a single job this is consistent as long as all times use the same path.
-  return epoch + sub
-end
+local function parse_time(ts) return ci_model.parse_time(ts) end
 
 ---@param line string
 ---@return number|nil

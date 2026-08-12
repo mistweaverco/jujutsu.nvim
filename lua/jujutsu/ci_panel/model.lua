@@ -1,19 +1,54 @@
 local M = {}
 
+---Unix epoch for a UTC civil datetime (Howard Hinnant days_from_civil).
+---os.time(table) is local wall-clock, so it cannot parse forge ISO stamps (UTC).
+---@param y integer
+---@param m integer
+---@param d integer
+---@param h integer
+---@param mi integer
+---@param s integer
+---@return integer
+local function utc_epoch(y, m, d, h, mi, s)
+  local y0 = y - (m <= 2 and 1 or 0)
+  local era = math.floor(y0 / 400)
+  local yoe = y0 - era * 400
+  local doy = math.floor((153 * (m + (m > 2 and -3 or 9)) + 2) / 5) + d - 1
+  local doe = yoe * 365 + math.floor(yoe / 4) - math.floor(yoe / 100) + doy
+  local days = era * 146097 + doe - 719468
+  return days * 86400 + h * 3600 + mi * 60 + s
+end
+
+---Parse an ISO-8601 / RFC3339 timestamp to unix epoch seconds.
+---Forge APIs (GitHub, GitLab, Forgejo, Bitbucket) send UTC (`Z` / `+00:00`).
 ---@param iso? string
 ---@return number|nil
 function M.parse_time(iso)
   if not iso or iso == "" then return nil end
-  local y, mo, d, h, mi, s = iso:match("^(%d+)%-(%d+)%-(%d+)T(%d+):(%d+):(%d+)")
+  -- Lua patterns cannot make a capture optional with `?`; split fraction / tz off the tail.
+  local y, mo, d, h, mi, s, rest = iso:match("^(%d+)%-(%d+)%-(%d+)[T ](%d+):(%d+):(%d+)(.*)$")
   if not y then return nil end
-  return os.time({
-    year = tonumber(y),
-    month = tonumber(mo),
-    day = tonumber(d),
-    hour = tonumber(h),
-    min = tonumber(mi),
-    sec = tonumber(s),
-  })
+  y, mo, d = tonumber(y), tonumber(mo), tonumber(d)
+  h, mi, s = tonumber(h), tonumber(mi), tonumber(s)
+  if not (y and mo and d and h and mi and s) then return nil end
+
+  rest = rest or ""
+  local frac = rest:match("^(%.%d+)")
+  if frac then rest = rest:sub(#frac + 1) end
+
+  local off = 0
+  local tz = vim.trim(rest)
+  if tz ~= "" and tz ~= "Z" and tz ~= "z" then
+    local sign, th, tm = tz:match("^([%+%-])(%d%d):?(%d%d)$")
+    if sign then
+      off = tonumber(th) * 3600 + tonumber(tm) * 60
+      if sign == "-" then off = -off end
+    end
+  end
+
+  local sub = 0
+  if frac then sub = tonumber("0" .. frac) or 0 end
+  return utc_epoch(y, mo, d, h, mi, s) - off + sub
 end
 
 ---@param start_iso? string
@@ -89,7 +124,7 @@ function M.status_icon(status)
     or status == "halted"
     or status == "not_run"
   then
-    return "–", "JujutsuSubtle"
+    return "-", "JujutsuSubtle"
   end
   if
     status == "in_progress"

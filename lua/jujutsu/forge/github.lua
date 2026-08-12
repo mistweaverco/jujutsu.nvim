@@ -1,4 +1,5 @@
 local cache = require("jujutsu.forge.cache")
+local ci_model = require("jujutsu.ci_panel.model")
 local labels_mod = require("jujutsu.forge.labels")
 
 local M = {}
@@ -939,39 +940,6 @@ end
 ---@return string
 local function repo_flag(_, remote) return remote.owner .. "/" .. remote.repo end
 
----@param iso? string
----@return number|nil
-local function parse_time(iso)
-  if not iso or iso == "" then return nil end
-  local y, mo, d, h, mi, s = iso:match("^(%d+)%-(%d+)%-(%d+)T(%d+):(%d+):(%d+)")
-  if not y then return nil end
-  return os.time({
-    year = tonumber(y),
-    month = tonumber(mo),
-    day = tonumber(d),
-    hour = tonumber(h),
-    min = tonumber(mi),
-    sec = tonumber(s),
-  })
-end
-
----@param start_iso? string
----@param end_iso? string
----@return string
-local function format_elapsed(start_iso, end_iso)
-  local start_t = parse_time(start_iso)
-  if not start_t then return "" end
-  local end_t = parse_time(end_iso) or os.time()
-  local secs = math.max(0, end_t - start_t)
-  if secs < 60 then return string.format("%ds", secs) end
-  local mins = math.floor(secs / 60)
-  local rem = secs % 60
-  if mins < 60 then return string.format("%dm%ds", mins, rem) end
-  local hrs = math.floor(mins / 60)
-  mins = mins % 60
-  return string.format("%dh%dm", hrs, mins)
-end
-
 ---@return ForgeCiRun
 local function map_run(r)
   local status = r.status or ""
@@ -997,7 +965,7 @@ local function map_run(r)
     created_at = r.createdAt or r.created_at,
     updated_at = updated,
     started_at = started,
-    elapsed = format_elapsed(started, updated),
+    elapsed = ci_model.format_elapsed(started, updated),
   }
 end
 
@@ -1023,7 +991,7 @@ local function map_job(j)
     status = j.status or "",
     conclusion = j.conclusion,
     url = j.url or j.html_url,
-    elapsed = format_elapsed(started, completed),
+    elapsed = ci_model.format_elapsed(started, completed),
     started_at = started,
     completed_at = completed,
     steps = steps,
@@ -1057,7 +1025,8 @@ function M.list_ci_runs(root, remote, opts)
   for _, r in ipairs(data) do
     local mapped = map_run(r)
     if mapped.created_at and mapped.created_at ~= "" then
-      mapped.elapsed = mapped.elapsed ~= "" and mapped.elapsed or format_elapsed(mapped.started_at, mapped.updated_at)
+      mapped.elapsed = mapped.elapsed ~= "" and mapped.elapsed
+        or ci_model.format_elapsed(mapped.started_at, mapped.updated_at)
     end
     table.insert(out, mapped)
   end
