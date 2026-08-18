@@ -12,7 +12,7 @@ interface for Neovim.
 Inspired by [`Neogit`](https://github.com/neogitorg/neogit)
 rewritten without required plugin dependencies.
 
-[Screenshots 📸](https://github.com/mistweaverco/jujutsu.nvim/wiki/Screenshots)
+[Screenshots 📸](https://github.com/dont-be-evil-company/jujutsu.nvim/wiki/Screenshots)
 
 </div>
 
@@ -40,7 +40,7 @@ Selections (revisions, bookmarks, PRs, …) use the built-in fuzzy finder.
 
 ```lua
 {
-  "mistweaverco/jujutsu.nvim",
+  "dont-be-evil-company/jujutsu.nvim",
   lazy = true,
   -- optional deps:
   -- dependencies = { "sindrets/diffview.nvim" },
