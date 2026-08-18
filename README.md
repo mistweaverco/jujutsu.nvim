@@ -114,6 +114,7 @@ jj.review({ number = 15 })             -- open a specific PR/MR
 jj.forge_popup()                       -- Magit-style forge hub (PRs, issues, CI)
 jj.issue_panel()                       -- conversation panel (prompt for kind + number)
 jj.issue_panel({ number = 12, kind = "issue" })
+jj.get_presence()                      -- current jujutsu UI context (kind, path, revision, root)
 
 -- Bindable action for your own keymaps:
 vim.keymap.set("n", "<leader>jc", jj.action("change", "commit"))

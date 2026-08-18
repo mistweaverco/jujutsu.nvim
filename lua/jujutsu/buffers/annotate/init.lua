@@ -205,4 +205,7 @@ function M.close() close_view() end
 ---@return boolean
 function M.is_open() return instance ~= nil end
 
+---@return table|nil
+function M.instance() return instance end
+
 return M

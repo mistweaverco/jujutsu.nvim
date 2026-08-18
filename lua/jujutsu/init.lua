@@ -247,6 +247,11 @@ function M.forge_popup(opts)
   require("jujutsu.popups.forge").create({ root = root })
 end
 
+---Describe what the user is currently looking at in the jujutsu UI.
+---@param bufnr? integer
+---@return JujutsuPresence|nil
+function M.get_presence(bufnr) return require("jujutsu.presence").get_presence(bufnr) end
+
 function M.get_config() return config.values end
 
 M.config = config
